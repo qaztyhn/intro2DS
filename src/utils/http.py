@@ -21,6 +21,9 @@ from .errors import (
 # Retry transient HTTP failures and cap all retry delays in seconds.
 RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 MAX_DELAY = 30
+DEFAULT_HEADERS = {
+    "User-Agent": "Intro2DS-crawler/1.0 (student project)"
+}
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ class Throttle:
         self._last = time.monotonic()
 
 ARXIV = Throttle(3.0)
-S2 = Throttle(1.0)
+S2 = Throttle(1.0) # 3.0 if without API key
 
 def get_retry_delay(response, attempt, base_delay=1.0):
     """Use Retry-After when valid; otherwise use capped exponential backoff.
@@ -115,6 +118,9 @@ def request_with_retry(
     if not math.isfinite(base_delay) or base_delay < 0:
         raise ValueError("base_delay must be finite and non-negative")
 
+
+    headers = {**DEFAULT_HEADERS, **(headers or {})}
+
     # Include the initial request in addition to the allowed retries.
     for attempt in range(max_retries + 1):
         if throttle is not None:
@@ -187,3 +193,7 @@ def request_json(*args, **kwargs):
 def request_text(*args, **kwargs):
     """Return response text using the same request and retry settings."""
     return request_with_retry(*args, **kwargs).text
+
+
+def request_bytes(*args, **kwargs):
+    return request_with_retry(*args, **kwargs).content
