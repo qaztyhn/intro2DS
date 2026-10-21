@@ -800,8 +800,14 @@ def make_request_hook(
     *,
     arxiv_id: str | None = None,
     version: int | None = None,
+    request_id: str | None = None,
 ):
     """Create a request-attempt callback with fixed context."""
+    if request_id is None:
+        request_id = uuid4().hex
+
+    if not isinstance(request_id, str) or not request_id.strip():
+        raise ValueError("request_id must be a non-empty string")
 
     def on_attempt(
         *,
@@ -831,6 +837,7 @@ def make_request_hook(
             error_code=error_code,
             duration_s=duration,
             error_message=error_message,
+            request_id=request_id,
         )
     return on_attempt
 
@@ -908,6 +915,7 @@ def build_run_report(
         "references": summarize_references(ids, reference_results),
         "source_sizes": summarize_source_sizes(ids, paper_results),
         "timing": timing,
+        "requests": summarize_request_attempts(event_list, run_id),
         "resources": dict(resource_summary),
     }
 
@@ -944,3 +952,81 @@ def write_run_report(path: str | Path, report: dict) -> None:
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+def summarize_request_attempts(
+    events: Iterable[dict],
+    run_id: str,
+) -> dict:
+    """Summarize observed attempts, grouped by logical request."""
+    requests = {}
+    error_counts = {}
+    durations = []
+    retry_count = 0
+    error_attempt_count = 0
+
+    for event in events:
+        if event["run_id"] != run_id:
+            continue
+        if event["event"] != "request_attempt_finished":
+            continue
+
+        request_id = event.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise ValueError("Request events require a request_id")
+
+        attempt = event.get("attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int):
+            raise TypeError("Attempt must be an integer")
+        if attempt < 1:
+            raise ValueError("Attempt must start at 1")
+
+        duration = event.get("duration_s")
+        if isinstance(duration, bool) or not isinstance(duration, Real):
+            raise TypeError("Duration must be a real number")
+        if not isfinite(duration) or duration < 0:
+            raise ValueError("Duration must be finite and non-negative")
+
+        error_code = event.get("error_code")
+        if error_code is not None:
+            if not isinstance(error_code, str) or not error_code.strip():
+                raise ValueError("Error code must be non-empty or None")
+
+        context = (
+            event["stage"],
+            event.get("arxiv_id"),
+            event.get("version"),
+        )
+        request = requests.setdefault(
+            request_id, {"context": context, "attempts": set()}
+        )
+
+        if request["context"] != context:
+            raise ValueError("Request ID has inconsistent context")
+        if attempt in request["attempts"]:
+            raise ValueError("Duplicate request attempt")
+
+        request["attempts"].add(attempt)
+        durations.append(duration)
+        retry_count += attempt > 1
+
+        if error_code is not None:
+            error_attempt_count += 1
+            error_counts[error_code] = error_counts.get(error_code, 0) + 1
+
+    incomplete_history_count = sum(
+        request["attempts"] != set(
+            range(1, max(request["attempts"]) + 1)
+        )
+        for request in requests.values()
+    )
+
+    return {
+        "observed_request_count": len(requests),
+        "observed_attempt_count": len(durations),
+        "observed_retry_attempt_count": retry_count,
+        "error_attempt_count": error_attempt_count,
+        "error_code_counts": error_counts,
+        "requests_with_missing_attempts": incomplete_history_count,
+        "attempt_duration_sum_s": sum(durations),
+        "attempt_duration_mean_s": mean_or_none(durations),
+    }

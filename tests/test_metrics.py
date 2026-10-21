@@ -33,6 +33,8 @@ from src.metrics import build_run_report
 
 from src.metrics import write_run_report
 
+from src.metrics import summarize_request_attempts
+
 @pytest.mark.parametrize(
     "numerator, denominator, expected",
     [
@@ -2052,3 +2054,250 @@ def test_write_report_rejects_non_dictionary(tmp_path, report):
         write_run_report(path, report)
 
     assert not path.exists()
+
+def test_request_hook_keeps_id_across_attempts(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, "run-01")
+    hook = make_request_hook(logger, "references")
+
+    for attempt in (1, 2):
+        hook(
+            attempt=attempt,
+            http_status=429,
+            error_code="HTTP_429",
+            duration=0.1,
+            error_message="Too many requests",
+        )
+
+    events = read_events(path)
+
+    assert events[0]["request_id"]
+    assert events[0]["request_id"] == events[1]["request_id"]
+    assert [event["attempt"] for event in events] == [1, 2]
+
+
+def test_request_hooks_generate_distinct_ids(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, "run-01")
+
+    for _ in range(2):
+        hook = make_request_hook(logger, "references")
+        hook(
+            attempt=1,
+            http_status=200,
+            error_code=None,
+            duration=0.1,
+            error_message=None,
+        )
+
+    events = read_events(path)
+
+    assert events[0]["request_id"] != events[1]["request_id"]
+
+
+def test_request_hook_preserves_explicit_request_id(tmp_path):
+    path = tmp_path / "events.jsonl"
+    hook = make_request_hook(
+        EventLogger(path, "run-01"),
+        "references",
+        request_id="request-001",
+    )
+
+    hook(
+        attempt=1,
+        http_status=200,
+        error_code=None,
+        duration=0.1,
+        error_message=None,
+    )
+
+    assert read_events(path)[0]["request_id"] == "request-001"
+
+
+@pytest.mark.parametrize("request_id", ["", "  ", 123, True])
+def test_request_hook_rejects_invalid_request_id(tmp_path, request_id):
+    logger = EventLogger(tmp_path / "events.jsonl", "run-01")
+
+    with pytest.raises(ValueError, match="request_id"):
+        make_request_hook(
+            logger, "references", request_id=request_id
+        )
+
+def make_attempt_event(request_id, attempt, **fields):
+    return {
+        "run_id": "run-01",
+        "stage": "references",
+        "event": "request_attempt_finished",
+        "request_id": request_id,
+        "attempt": attempt,
+        "duration_s": 0.1,
+        "error_code": None,
+        **fields,
+    }
+
+
+def test_request_summary_counts_retries_and_errors():
+    events = [
+        make_attempt_event("a", 1, error_code="HTTP_429", duration_s=0.2),
+        make_attempt_event("a", 2, duration_s=0.4),
+        make_attempt_event("b", 1, error_code="TIMEOUT", duration_s=0.3),
+    ]
+
+    result = summarize_request_attempts(events, "run-01")
+
+    assert result["observed_request_count"] == 2
+    assert result["observed_attempt_count"] == 3
+    assert result["observed_retry_attempt_count"] == 1
+    assert result["error_attempt_count"] == 2
+    assert result["error_code_counts"] == {"HTTP_429": 1, "TIMEOUT": 1}
+    assert result["requests_with_missing_attempts"] == 0
+    assert result["attempt_duration_sum_s"] == pytest.approx(0.9)
+    assert result["attempt_duration_mean_s"] == pytest.approx(0.3)
+
+
+def test_request_summary_detects_missing_attempts():
+    events = [
+        make_attempt_event("a", 1),
+        make_attempt_event("a", 3),
+        make_attempt_event("b", 2),
+    ]
+
+    result = summarize_request_attempts(events, "run-01")
+
+    assert result["requests_with_missing_attempts"] == 2
+    assert result["observed_retry_attempt_count"] == 2
+
+
+def test_request_summary_filters_run_and_event():
+    events = [
+        make_attempt_event("a", 1, run_id="other-run"),
+        make_attempt_event("b", 1, event="started"),
+    ]
+
+    result = summarize_request_attempts(events, "run-01")
+
+    assert result["observed_attempt_count"] == 0
+    assert result["attempt_duration_mean_s"] is None
+
+
+def test_request_summary_empty():
+    result = summarize_request_attempts([], "run-01")
+
+    assert result["observed_request_count"] == 0
+    assert result["observed_attempt_count"] == 0
+    assert result["attempt_duration_mean_s"] is None
+
+
+def test_request_summary_rejects_duplicate_attempt():
+    events = [
+        make_attempt_event("a", 1),
+        make_attempt_event("a", 1),
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate request attempt"):
+        summarize_request_attempts(events, "run-01")
+
+
+@pytest.mark.parametrize(
+    "changed_context",
+    [
+        {"stage": "download"},
+        {"arxiv_id": "another-paper"},
+        {"version": 2},
+    ],
+)
+def test_request_summary_rejects_inconsistent_context(changed_context):
+    events = [
+        make_attempt_event("a", 1),
+        make_attempt_event("a", 2, **changed_context),
+    ]
+
+    with pytest.raises(ValueError, match="inconsistent context"):
+        summarize_request_attempts(events, "run-01")
+
+
+@pytest.mark.parametrize("request_id", [None, "", "  "])
+def test_request_summary_requires_request_id(request_id):
+    with pytest.raises(ValueError, match="request_id"):
+        summarize_request_attempts(
+            [make_attempt_event(request_id, 1)], "run-01"
+        )
+
+
+@pytest.mark.parametrize("attempt", [0, -1])
+def test_request_summary_rejects_invalid_attempt_values(attempt):
+    with pytest.raises(ValueError):
+        summarize_request_attempts(
+            [make_attempt_event("a", attempt)], "run-01"
+        )
+
+
+@pytest.mark.parametrize("attempt", [True, 1.5])
+def test_request_summary_rejects_invalid_attempt_types(attempt):
+    with pytest.raises(TypeError):
+        summarize_request_attempts(
+            [make_attempt_event("a", attempt)], "run-01"
+        )
+
+
+@pytest.mark.parametrize("duration", [-1, float("nan"), float("inf")])
+def test_request_summary_rejects_invalid_duration_values(duration):
+    with pytest.raises(ValueError):
+        summarize_request_attempts(
+            [make_attempt_event("a", 1, duration_s=duration)], "run-01"
+        )
+
+
+@pytest.mark.parametrize("duration", [None, True, "1"])
+def test_request_summary_rejects_invalid_duration_types(duration):
+    with pytest.raises(TypeError):
+        summarize_request_attempts(
+            [make_attempt_event("a", 1, duration_s=duration)], "run-01"
+        )
+
+
+@pytest.mark.parametrize("error_code", ["", "  ", 123])
+def test_request_summary_rejects_invalid_error_code(error_code):
+    with pytest.raises(ValueError):
+        summarize_request_attempts(
+            [make_attempt_event("a", 1, error_code=error_code)], "run-01"
+        )
+
+def test_build_run_report_includes_request_summary():
+    events = [
+        make_attempt_event(
+            "request-a",
+            1,
+            error_code="HTTP_429",
+            duration_s=0.2,
+        ),
+        make_attempt_event(
+            "request-a",
+            2,
+            duration_s=0.4,
+        ),
+        make_attempt_event(
+            "request-b",
+            1,
+            run_id="other-run",
+        ),
+    ]
+
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=[],
+        paper_results={},
+        events=events,
+        resource_summary={},
+        environment={},
+    )
+
+    requests = report["requests"]
+
+    assert requests["observed_request_count"] == 1
+    assert requests["observed_attempt_count"] == 2
+    assert requests["observed_retry_attempt_count"] == 1
+    assert requests["error_attempt_count"] == 1
+    assert requests["error_code_counts"] == {"HTTP_429": 1}
+    assert requests["attempt_duration_sum_s"] == pytest.approx(0.6)
