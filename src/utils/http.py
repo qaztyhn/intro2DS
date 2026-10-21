@@ -24,6 +24,20 @@ MAX_DELAY = 30
 
 logger = logging.getLogger(__name__)
 
+class Throttle:
+    def __init__(self, min_interval):
+        self.min_interval = min_interval
+        self._last = None
+
+    def wait(self):
+        if self._last is not None:
+            remaining = self._last + self.min_interval - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last = time.monotonic()
+
+ARXIV = Throttle(3.0)
+S2 = Throttle(1.0)
 
 def get_retry_delay(response, attempt, base_delay=1.0):
     """Use Retry-After when valid; otherwise use capped exponential backoff.
@@ -73,6 +87,7 @@ def request_with_retry(
     timeout=3,
     max_retries=3,
     base_delay=1.0,
+    throttle=None
 ):
     """Send a GET request, retry transient failures, and return the response.
 
@@ -102,6 +117,8 @@ def request_with_retry(
 
     # Include the initial request in addition to the allowed retries.
     for attempt in range(max_retries + 1):
+        if throttle is not None:
+            throttle.wait()
         try:
             response = requests.get(
                 url=url, params=params, headers=headers, timeout=timeout
@@ -140,6 +157,9 @@ def request_with_retry(
             continue
 
         # Map HTTP failures after any permitted retries have been exhausted.
+        if status == 408:
+            raise RequestTimeoutError()
+        
         if status == 429:
             raise RateLimitError()
 
