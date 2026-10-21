@@ -26,6 +26,7 @@ from src.metrics import summarize_source_sizes
 from src.metrics import read_events
 from src.metrics import summarize_stage_times
 from src.metrics import log_resource_results
+from src.metrics import make_request_hook
 
 @pytest.mark.parametrize(
     "numerator, denominator, expected",
@@ -1672,3 +1673,125 @@ def test_log_resource_results_missing_output_does_not_write_log(tmp_path):
         log_resource_results(logger, sampler, tmp_path / "missing")
 
     assert not logger.path.exists()
+
+def test_request_hook_logs_context_and_maps_duration(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, run_id="run-01")
+    hook = make_request_hook(
+        logger, "references", arxiv_id="2507.11659"
+    )
+
+    hook(
+        attempt=1,
+        http_status=429,
+        error_code="HTTP_429",
+        duration=0.8,
+        error_message="Too many requests",
+    )
+
+    events = read_events(path)
+    assert len(events) == 1
+
+    event = events[0]
+    assert event["run_id"] == "run-01"
+    assert event["stage"] == "references"
+    assert event["event"] == "request_attempt_finished"
+    assert event["arxiv_id"] == "2507.11659"
+    assert event["version"] is None
+    assert event["attempt"] == 1
+    assert event["http_status"] == 429
+    assert event["error_code"] == "HTTP_429"
+    assert event["error_message"] == "Too many requests"
+    assert event["duration_s"] == pytest.approx(0.8)
+    assert "duration" not in event
+
+
+def test_request_hook_records_each_attempt(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, run_id="run-01")
+    hook = make_request_hook(
+        logger, "download", arxiv_id="2507.11659", version=2
+    )
+
+    hook(
+        attempt=1,
+        http_status=None,
+        error_code="TIMEOUT",
+        duration=2.0,
+        error_message="Request timed out",
+    )
+    hook(
+        attempt=2,
+        http_status=200,
+        error_code=None,
+        duration=0.5,
+        error_message=None,
+    )
+
+    events = read_events(path)
+
+    assert [event["attempt"] for event in events] == [1, 2]
+    assert all(event["version"] == 2 for event in events)
+    assert events[0]["http_status"] is None
+    assert events[1]["error_code"] is None
+    assert events[1]["error_message"] is None
+
+
+@pytest.mark.parametrize(
+    "attempt, error_type",
+    [
+        (0, ValueError),
+        (-1, ValueError),
+        (True, TypeError),
+        (1.5, TypeError),
+    ],
+)
+def test_request_hook_rejects_invalid_attempt(
+    tmp_path, attempt, error_type
+):
+    path = tmp_path / "events.jsonl"
+    hook = make_request_hook(
+        EventLogger(path, "run-01"), "references"
+    )
+
+    with pytest.raises(error_type):
+        hook(
+            attempt=attempt,
+            http_status=200,
+            error_code=None,
+            duration=0.1,
+            error_message=None,
+        )
+
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "duration, error_type",
+    [
+        (-1, ValueError),
+        (float("nan"), ValueError),
+        (float("inf"), ValueError),
+        (True, TypeError),
+        ("0.1", TypeError),
+        (None, TypeError),
+    ],
+)
+def test_request_hook_rejects_invalid_duration(
+    tmp_path, duration, error_type
+):
+    path = tmp_path / "events.jsonl"
+    hook = make_request_hook(
+        EventLogger(path, "run-01"), "references"
+    )
+
+    with pytest.raises(error_type):
+        hook(
+            attempt=1,
+            http_status=200,
+            error_code=None,
+            duration=duration,
+            error_message=None,
+        )
+
+    assert not path.exists()
