@@ -787,3 +787,43 @@ def log_resource_results(
     )
 
     return summary
+
+def make_request_hook(
+    logger: EventLogger,
+    stage: str,
+    *,
+    arxiv_id: str | None = None,
+    version: int | None = None,
+):
+    """Create a request-attempt callback with fixed context."""
+
+    def on_attempt(
+        *,
+        attempt: int,
+        http_status: int | None,
+        error_code: str | None,
+        duration: float,
+        error_message: str | None,
+    ) -> None:
+        if isinstance(attempt, bool) or not isinstance(attempt, int):
+            raise TypeError("Attempt must be an integer")
+        if attempt < 1:
+            raise ValueError("Attempt must start at 1")
+
+        if isinstance(duration, bool) or not isinstance(duration, Real):
+            raise TypeError("Duration must be a real number")
+        if not isfinite(duration) or duration < 0:
+            raise ValueError("Duration must be finite and non-negative")
+
+        logger.log(
+            stage,
+            "request_attempt_finished",
+            arxiv_id=arxiv_id,
+            version=version,
+            attempt=attempt,
+            http_status=http_status,
+            error_code=error_code,
+            duration_s=duration,
+            error_message=error_message,
+        )
+    return on_attempt
