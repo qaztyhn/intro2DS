@@ -20,9 +20,30 @@ from .errors import (
 
 # Retry transient HTTP failures and cap all retry delays in seconds.
 RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
-MAX_DELAY = 30
+MAX_DELAY = 30  # Upper bound for both Retry-After and exponential backoff. This is for experiment. Change if needed
+DEFAULT_HEADERS = {"User-Agent": "Intro2DS-crawler/1.0 (student project)"}
 
 logger = logging.getLogger(__name__)
+
+
+class Throttle:
+    """Space request starts by at least min_interval seconds per instance."""
+
+    def __init__(self, min_interval):
+        self.min_interval = min_interval
+        self._last = None
+
+    def wait(self):
+        if self._last is not None:
+            # A monotonic clock keeps elapsed time independent of clock changes.
+            remaining = self._last + self.min_interval - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last = time.monotonic()
+
+
+ARXIV = Throttle(3.0)
+S2 = Throttle(1.0)  # 3.0 if without API key
 
 
 def get_retry_delay(response, attempt, base_delay=1.0):
@@ -53,7 +74,7 @@ def get_retry_delay(response, attempt, base_delay=1.0):
                 # Fall back to exponential backoff for malformed dates.
                 pass
 
-    # Scale without constructing a huge integer for large attempt indices.
+    # Use exponential backoff capped at MAX_DELAY.
     return min(base_delay * 2**attempt, MAX_DELAY)
 
 
@@ -66,6 +87,26 @@ def wait_before_retry(response, attempt, max_retries, base_delay, reason):
     time.sleep(delay)
 
 
+def _emit(on_attempt, attempt, started, status=None, error_code=None, message=None):
+    """Report one attempt without allowing callback failures to abort requests."""
+    if on_attempt is None:
+        return
+
+    try:
+        on_attempt(
+            {
+                "attempt": attempt + 1,
+                "http_status": status,
+                "error_code": error_code,
+                "message": message,
+                # Exclude throttle waits and retry delays from attempt duration.
+                "duration": time.monotonic() - started,
+            }
+        )
+    except Exception:
+        logger.exception("on_attempt hook failed")
+
+
 def request_with_retry(
     url,
     params=None,
@@ -73,12 +114,17 @@ def request_with_retry(
     timeout=3,
     max_retries=3,
     base_delay=1.0,
+    throttle=None,
+    on_attempt=None,
 ):
     """Send a GET request, retry transient failures, and return the response.
 
     max_retries counts additional attempts after the initial request.
     timeout must be a finite, positive number of seconds.
     Request failures and HTTP errors are mapped to application-specific errors.
+    throttle.wait() runs before every attempt, including retries.
+    on_attempt receives a dict with a one-based attempt number, HTTP status,
+    error code, message, and duration in seconds; callback errors are logged.
     """
     # Validate retry settings before sending any requests.
     if (
@@ -100,38 +146,78 @@ def request_with_retry(
     if not math.isfinite(base_delay) or base_delay < 0:
         raise ValueError("base_delay must be finite and non-negative")
 
+    headers = {**DEFAULT_HEADERS, **(headers or {})}
+
     # Include the initial request in addition to the allowed retries.
     for attempt in range(max_retries + 1):
+        if throttle is not None:
+            throttle.wait()
         try:
+            started = time.monotonic()
             response = requests.get(
                 url=url, params=params, headers=headers, timeout=timeout
             )
         except requests.exceptions.SSLError as e:
             # TLS failures are not retried.
+            _emit(
+                on_attempt, attempt, started, error_code="NETWORK_ERROR", message=str(e)
+            )
             raise NetworkError() from e
 
         except requests.exceptions.ChunkedEncodingError as e:
+            _emit(
+                on_attempt, attempt, started, error_code="NETWORK_ERROR", message=str(e)
+            )
             if attempt == max_retries:
                 raise NetworkError() from e
             wait_before_retry(None, attempt, max_retries, base_delay, str(e))
             continue
 
         except requests.exceptions.Timeout as e:
+            _emit(on_attempt, attempt, started, error_code="TIMEOUT", message=str(e))
             if attempt == max_retries:
                 raise RequestTimeoutError() from e
             wait_before_retry(None, attempt, max_retries, base_delay, str(e))
             continue
 
         except requests.exceptions.ConnectionError as e:
+            _emit(
+                on_attempt, attempt, started, error_code="NETWORK_ERROR", message=str(e)
+            )
             if attempt == max_retries:
                 raise NetworkError() from e
             wait_before_retry(None, attempt, max_retries, base_delay, str(e))
             continue
 
         except requests.exceptions.RequestException as e:
+            _emit(
+                on_attempt, attempt, started, error_code="REQUEST_ERROR", message=str(e)
+            )
             raise RequestError(str(e)) from e
 
         status = response.status_code
+
+        error = None
+        # Classify the failure separately from deciding whether it is retryable.
+        if status == 408:
+            error = RequestTimeoutError()
+
+        elif status == 429:
+            error = RateLimitError()
+
+        elif 400 <= status < 500:
+            error = ClientError(status)
+
+        elif status >= 500:
+            error = ServerError(status)
+
+        _emit(
+            on_attempt,
+            attempt,
+            started,
+            status=status,
+            error_code=error.error_code if error else None,
+        )
 
         if status in RETRY_STATUS_CODES and attempt < max_retries:
             wait_before_retry(
@@ -139,15 +225,8 @@ def request_with_retry(
             )
             continue
 
-        # Map HTTP failures after any permitted retries have been exhausted.
-        if status == 429:
-            raise RateLimitError()
-
-        if 400 <= status < 500:
-            raise ClientError(status)
-
-        if status >= 500:
-            raise ServerError(status)
+        if error is not None:
+            raise error
 
         return response
 
@@ -167,3 +246,8 @@ def request_json(*args, **kwargs):
 def request_text(*args, **kwargs):
     """Return response text using the same request and retry settings."""
     return request_with_retry(*args, **kwargs).text
+
+
+def request_bytes(*args, **kwargs):
+    """Return response bytes using the same request and retry settings."""
+    return request_with_retry(*args, **kwargs).content
