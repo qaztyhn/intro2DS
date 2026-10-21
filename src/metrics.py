@@ -14,6 +14,12 @@ import json
 from datetime import datetime, timezone
 from threading import Lock
 
+import platform
+import sys
+from importlib.metadata import version as package_version
+
+from tempfile import NamedTemporaryFile
+
 def safe_ratio(numerator: int, denominator: int) -> float | None:
     """Return a proportion in [0, 1], or None for a zero denominator."""
     for name, value in (
@@ -827,3 +833,114 @@ def make_request_hook(
             error_message=error_message,
         )
     return on_attempt
+
+def collect_environment() -> dict:
+    """Describe the environment without collecting secrets or usernames."""
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "system": platform.system(),
+        "system_release": platform.release(),
+        "machine": platform.machine(),
+        "logical_cpu_count": psutil.cpu_count(logical=True),
+        "physical_cpu_count": psutil.cpu_count(logical=False),
+        "total_ram_bytes": psutil.virtual_memory().total,
+        "psutil_version": package_version("psutil"),
+        "platform": sys.platform,
+    }
+
+def build_run_report(
+    *,
+    run_id: str,
+    variant: str,
+    input_ids: Iterable[str],
+    paper_results: dict[str, dict],
+    events: Iterable[dict],
+    resource_summary: dict,
+    environment: dict,
+) -> dict:
+    """Combine outcome, timing and resource metrics for one run."""
+    ids = list(input_ids)
+    event_list = list(events)
+
+    papers = summarize_papers(ids, paper_results)
+
+    expected_versions = {
+        paper_id: record.get("expected_versions")
+        for paper_id, record in paper_results.items()
+    }
+    for paper_id in ids:
+        expected_versions.setdefault(paper_id, None)
+
+    version_results = {
+        paper_id: record.get("versions", {})
+        for paper_id, record in paper_results.items()
+    }
+    reference_results = {
+        paper_id: record["references"]
+        for paper_id, record in paper_results.items()
+        if "references" in record
+    }
+
+    stages = (
+        "pipeline",
+        "discovery",
+        "paper",
+        "download",
+        "extract",
+        "references",
+        "storage",
+    )
+    timing = {
+        stage: summarize_stage_times(event_list, run_id, stage)
+        for stage in stages
+    }
+
+    return {
+        "report_schema_version": "1.0",
+        "run_id": run_id,
+        "variant": variant,
+        "environment": dict(environment),
+        "papers": papers,
+        "versions": summarize_versions(
+            expected_versions, version_results
+        ),
+        "references": summarize_references(ids, reference_results),
+        "source_sizes": summarize_source_sizes(ids, paper_results),
+        "timing": timing,
+        "resources": dict(resource_summary),
+    }
+
+def write_run_report(path: str | Path, report: dict) -> None:
+    """Write a JSON report using an atomic file replacement."""
+    if not isinstance(report, dict):
+        raise TypeError("Report must be a dictionary")
+
+    # Validate JSON before creating or changing files.
+    text = json.dumps(
+        report,
+        ensure_ascii=False,
+        allow_nan=False,
+        indent=2,
+    )
+
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(text + "\n")
+
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)

@@ -28,6 +28,11 @@ from src.metrics import summarize_stage_times
 from src.metrics import log_resource_results
 from src.metrics import make_request_hook
 
+from src.metrics import collect_environment
+from src.metrics import build_run_report
+
+from src.metrics import write_run_report
+
 @pytest.mark.parametrize(
     "numerator, denominator, expected",
     [
@@ -1793,5 +1798,257 @@ def test_request_hook_rejects_invalid_duration(
             duration=duration,
             error_message=None,
         )
+
+    assert not path.exists()
+
+def test_collect_environment_returns_expected_values(monkeypatch):
+    monkeypatch.setattr(
+        metrics.platform, "python_version", lambda: "3.12.7"
+    )
+    monkeypatch.setattr(
+        metrics.platform, "python_implementation", lambda: "CPython"
+    )
+    monkeypatch.setattr(metrics.platform, "system", lambda: "TestOS")
+    monkeypatch.setattr(metrics.platform, "release", lambda: "1.0")
+    monkeypatch.setattr(metrics.platform, "machine", lambda: "test64")
+    monkeypatch.setattr(metrics.sys, "platform", "test-platform")
+
+    monkeypatch.setattr(
+        metrics.psutil,
+        "cpu_count",
+        lambda logical=True: 12 if logical else 8,
+    )
+    monkeypatch.setattr(
+        metrics.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=16 * 1024**3),
+    )
+    monkeypatch.setattr(
+        metrics, "package_version", lambda name: "test-version"
+    )
+
+    result = collect_environment()
+
+    assert result == {
+        "python_version": "3.12.7",
+        "python_implementation": "CPython",
+        "system": "TestOS",
+        "system_release": "1.0",
+        "machine": "test64",
+        "logical_cpu_count": 12,
+        "physical_cpu_count": 8,
+        "total_ram_bytes": 16 * 1024**3,
+        "psutil_version": "test-version",
+        "platform": "test-platform",
+    }
+
+    # Must be writable as JSON without custom conversion.
+    json.dumps(result, allow_nan=False)
+
+
+def test_collect_environment_preserves_unknown_cpu_counts(monkeypatch):
+    monkeypatch.setattr(
+        metrics.psutil, "cpu_count", lambda logical=True: None
+    )
+
+    result = collect_environment()
+
+    assert result["logical_cpu_count"] is None
+    assert result["physical_cpu_count"] is None
+
+def test_build_run_report_combines_metrics(complete_paper_record):
+    record = deepcopy(complete_paper_record)
+    record.update({
+        "size_measurement_complete": True,
+        "unpacked_total_bytes": 100,
+        "kept_source_bytes": 25,
+    })
+    environment = {"system": "TestOS"}
+    resources = {"rss_peak_bytes": 1000}
+
+    events = [
+        make_timed_event("a", "started"),
+        make_timed_event(
+            "a", "finished", status="ok", duration_s=2.0
+        ),
+    ]
+
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=["paper-a"],
+        paper_results={"paper-a": record},
+        events=events,
+        resource_summary=resources,
+        environment=environment,
+    )
+
+    assert report["report_schema_version"] == "1.0"
+    assert report["run_id"] == "run-01"
+    assert report["variant"] == "baseline"
+    assert report["papers"]["paper_completion_rate"] == 1.0
+    assert report["versions"]["processed_version_count"] == 1
+    assert report["references"]["reference_empty_paper_count"] == 1
+    assert report["source_sizes"]["source_reduction_rate"] == pytest.approx(0.75)
+    assert report["timing"]["extract"]["duration_mean_s"] == pytest.approx(2.0)
+    assert report["resources"] == resources
+    assert report["environment"] == environment
+
+    json.dumps(report, allow_nan=False)
+
+
+def test_build_run_report_retains_unprocessed_papers():
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=["a", "b"],
+        paper_results={},
+        events=[],
+        resource_summary={},
+        environment={},
+    )
+
+    assert report["papers"]["incomplete_paper_count"] == 2
+    assert report["references"]["reference_status_counts"]["pending"] == 2
+    assert report["versions"]["unknown_versions_paper_count"] == 2
+    assert report["source_sizes"]["size_unmeasured_paper_count"] == 2
+    assert report["timing"]["pipeline"]["duration_mean_s"] is None
+
+
+def test_build_run_report_filters_timing_by_run():
+    events = [
+        make_timed_event("a", "started", run_id="other-run"),
+        make_timed_event(
+            "a",
+            "finished",
+            run_id="other-run",
+            status="ok",
+            duration_s=99.0,
+        ),
+    ]
+
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=[],
+        paper_results={},
+        events=events,
+        resource_summary={},
+        environment={},
+    )
+
+    assert report["timing"]["extract"]["finished_operation_count"] == 0
+
+
+def test_build_run_report_accepts_generators():
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=(paper_id for paper_id in ["a"]),
+        paper_results={},
+        events=(event for event in []),
+        resource_summary={},
+        environment={},
+    )
+
+    assert report["papers"]["input_paper_count"] == 1
+    assert report["references"]["input_paper_count"] == 1
+
+
+def test_build_run_report_copies_environment_and_resources():
+    environment = {"system": "TestOS"}
+    resources = {"rss_peak_bytes": 100}
+
+    report = build_run_report(
+        run_id="run-01",
+        variant="baseline",
+        input_ids=[],
+        paper_results={},
+        events=[],
+        resource_summary=resources,
+        environment=environment,
+    )
+
+    report["environment"]["system"] = "Changed"
+    report["resources"]["rss_peak_bytes"] = 999
+
+    assert environment["system"] == "TestOS"
+    assert resources["rss_peak_bytes"] == 100
+
+def test_write_report_creates_directory_and_preserves_data(tmp_path):
+    path = tmp_path / "nested" / "metrics.json"
+    report = {
+        "run_id": "run-01",
+        "description": "Dữ liệu kiểm thử",
+        "mean": None,
+        "rate": 0.5,
+    }
+
+    write_run_report(path, report)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == report
+    assert list(path.parent.glob("*.tmp")) == []
+
+
+def test_write_report_replaces_existing_report(tmp_path):
+    path = tmp_path / "metrics.json"
+    write_run_report(path, {"run_id": "old"})
+    write_run_report(path, {"run_id": "new"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "run_id": "new"
+    }
+
+
+@pytest.mark.parametrize(
+    "value", [float("nan"), float("inf"), float("-inf")]
+)
+def test_write_report_invalid_number_preserves_old_file(tmp_path, value):
+    path = tmp_path / "metrics.json"
+    write_run_report(path, {"run_id": "old"})
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError):
+        write_run_report(path, {"value": value})
+
+    assert path.read_bytes() == before
+
+
+def test_write_report_serialization_error_preserves_old_file(tmp_path):
+    path = tmp_path / "metrics.json"
+    write_run_report(path, {"run_id": "old"})
+    before = path.read_bytes()
+
+    with pytest.raises(TypeError):
+        write_run_report(path, {"invalid": object()})
+
+    assert path.read_bytes() == before
+
+
+def test_write_report_replace_failure_preserves_old_file(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "metrics.json"
+    write_run_report(path, {"run_id": "old"})
+    before = path.read_bytes()
+
+    def fail_replace(source, destination):
+        raise OSError("replacement failed")
+
+    monkeypatch.setattr(metrics.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replacement failed"):
+        write_run_report(path, {"run_id": "new"})
+
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("report", [None, [], "invalid"])
+def test_write_report_rejects_non_dictionary(tmp_path, report):
+    path = tmp_path / "metrics.json"
+
+    with pytest.raises(TypeError, match="dictionary"):
+        write_run_report(path, report)
 
     assert not path.exists()
