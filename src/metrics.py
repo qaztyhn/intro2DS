@@ -512,3 +512,278 @@ def summarize_versions(
             processed_count, expected_count
         ),
     }
+
+def summarize_papers(
+    input_ids: Iterable[str],
+    results: dict[str, dict],
+) -> dict:
+    """Count complete papers using discovery, sources, refs and schema."""
+    ids = list(input_ids)
+
+    if any(not isinstance(pid, str) or not pid.strip() for pid in ids):
+        raise ValueError("Input IDs must be non-empty strings")
+
+    if len(ids) != len(set(ids)):
+        raise ValueError("Input IDs must be unique")
+
+    if set(results) - set(ids):
+        raise ValueError("Results contain unexpected paper IDs")
+
+    counts = {
+        "discovery_ok_count": 0,
+        "source_complete_count": 0,
+        "references_ok_count": 0,
+        "schema_ok_count": 0,
+        "complete_paper_count": 0,
+    }
+
+    allowed = {"pending", "running", "ok", "empty", "failed", "skipped"}
+
+    for paper_id in ids:
+        record = results.get(paper_id, {})
+        discovery_status = record.get("discovery_status", "pending")
+        validation_status = record.get("validation_status", "pending")
+
+        if discovery_status not in allowed:
+            raise ValueError("Unknown discovery status")
+        if validation_status not in allowed:
+            raise ValueError("Unknown validation status")
+
+        versions = summarize_versions(
+            {paper_id: record.get("expected_versions")},
+            {paper_id: record.get("versions", {})},
+        )
+        references = summarize_references(
+            [paper_id],
+            {paper_id: record.get(
+                "references", {"status": "pending"}
+            )},
+        )
+
+        discovery_ok = discovery_status == "ok"
+        source_complete = (
+            versions["unknown_versions_paper_count"] == 0
+            and versions["unresolved_version_count"] == 0
+        )
+        references_ok = (
+            references["reference_response_success_rate"] == 1.0
+        )
+        schema_ok = validation_status == "ok"
+
+        counts["discovery_ok_count"] += discovery_ok
+        counts["source_complete_count"] += source_complete
+        counts["references_ok_count"] += references_ok
+        counts["schema_ok_count"] += schema_ok
+        counts["complete_paper_count"] += (
+            discovery_ok
+            and source_complete
+            and references_ok
+            and schema_ok
+        )
+
+    return {
+        "input_paper_count": len(ids),
+        **counts,
+        "incomplete_paper_count": len(ids) - counts["complete_paper_count"],
+        "paper_completion_rate": safe_ratio(
+            counts["complete_paper_count"], len(ids)
+        ),
+    }
+
+def summarize_source_sizes(
+    input_ids: Iterable[str],
+    results: dict[str, dict],
+) -> dict:
+    """Compare source sizes on papers with complete paired measurements."""
+    ids = list(input_ids)
+
+    if any(not isinstance(pid, str) or not pid.strip() for pid in ids):
+        raise ValueError("Input IDs must be non-empty strings")
+
+    if len(ids) != len(set(ids)):
+        raise ValueError("Input IDs must be unique")
+
+    if set(results) - set(ids):
+        raise ValueError("Results contain unexpected paper IDs")
+
+    before_sizes = []
+    after_sizes = []
+
+    for paper_id in ids:
+        record = results.get(paper_id, {})
+        complete = record.get("size_measurement_complete", False)
+
+        if not isinstance(complete, bool):
+            raise TypeError("size_measurement_complete must be a boolean")
+
+        if not complete:
+            continue
+
+        before = record.get("unpacked_total_bytes")
+        after = record.get("kept_source_bytes")
+
+        for value in (before, after):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("Complete sizes must be integer bytes")
+            if value < 0:
+                raise ValueError("Sizes must be non-negative")
+
+        if after > before:
+            raise ValueError("Kept source size cannot exceed original size")
+
+        before_sizes.append(before)
+        after_sizes.append(after)
+
+    total_before = sum(before_sizes)
+    total_after = sum(after_sizes)
+
+    return {
+        "input_paper_count": len(ids),
+        "size_measured_paper_count": len(before_sizes),
+        "size_unmeasured_paper_count": len(ids) - len(before_sizes),
+        "source_bytes_before_total": total_before,
+        "source_bytes_after_total": total_after,
+        "source_bytes_before_mean": mean_or_none(before_sizes),
+        "source_bytes_after_mean": mean_or_none(after_sizes),
+        "source_reduction_rate": safe_ratio(
+            total_before - total_after, total_before
+        ),
+    }
+
+def read_events(path: str | Path) -> list[dict]:
+    """Read JSONL events, reporting malformed records by line number."""
+    events = []
+    required = {"run_id", "timestamp", "stage", "event"}
+
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Invalid JSON at line {line_number}"
+                ) from error
+
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Expected an event object at line {line_number}"
+                )
+
+            missing = required - record.keys()
+            if missing:
+                raise ValueError(
+                    f"Missing fields at line {line_number}: "
+                    f"{sorted(missing)}"
+                )
+
+            for key in required:
+                value = record[key]
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(
+                        f"Invalid {key} at line {line_number}"
+                    )
+
+            events.append(record)
+
+    return events
+
+def summarize_stage_times(
+    events: Iterable[dict],
+    run_id: str,
+    stage: str,
+) -> dict:
+    """Summarize timed operations for one stage of one run."""
+    started = {}
+    finished = {}
+    durations = []
+    success_count = 0
+    failed_count = 0
+
+    for event in events:
+        if event["run_id"] != run_id or event["stage"] != stage:
+            continue
+
+        event_type = event["event"]
+        if event_type not in {"started", "finished"}:
+            continue
+
+        operation_id = event.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id.strip():
+            raise ValueError("Timed events require an operation_id")
+
+        if event_type == "started":
+            if operation_id in started:
+                raise ValueError("Duplicate operation start")
+            started[operation_id] = event
+            continue
+
+        if operation_id not in started:
+            raise ValueError("Operation finished without a start")
+
+        if operation_id in finished:
+            raise ValueError("Duplicate operation finish")
+
+        start = started[operation_id]
+        for key in ("arxiv_id", "version"):
+            if start.get(key) != event.get(key):
+                raise ValueError(f"Mismatched {key} between timed events")
+
+        duration = event.get("duration_s")
+        if isinstance(duration, bool) or not isinstance(duration, Real):
+            raise TypeError("Duration must be a real number")
+        if not isfinite(duration) or duration < 0:
+            raise ValueError("Duration must be finite and non-negative")
+
+        status = event.get("status")
+        if status not in {"ok", "failed"}:
+            raise ValueError("Timed outcome must be ok or failed")
+
+        finished[operation_id] = event
+        durations.append(duration)
+        success_count += status == "ok"
+        failed_count += status == "failed"
+
+    return {
+        "run_id": run_id,
+        "stage": stage,
+        "started_operation_count": len(started),
+        "finished_operation_count": len(finished),
+        "unfinished_operation_count": len(started) - len(finished),
+        "successful_operation_count": success_count,
+        "failed_operation_count": failed_count,
+        "duration_sum_s": sum(durations),
+        "duration_mean_s": mean_or_none(durations),
+        "duration_min_s": min(durations, default=None),
+        "duration_max_s": max(durations, default=None),
+    }
+def log_resource_results(
+    logger: EventLogger,
+    sampler: ResourceSampler,
+    output_directory: str | Path,
+) -> dict:
+    """Log collected samples and measure final corpus output size.
+
+    Call after monitoring has stopped and output writing has finished.
+    """
+    summary = sampler.summary()
+    summary["output_storage_bytes"] = directory_size_bytes(
+        output_directory
+    )
+
+    for sample in sampler.samples:
+        logger.log(
+            "resources",
+            "sample",
+            **sample,
+        )
+
+    logger.log(
+        "resources",
+        "summary",
+        **summary,
+    )
+
+    return summary

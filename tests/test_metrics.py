@@ -19,6 +19,13 @@ from uuid import uuid4
 from src.metrics import measure_stage
 from src.metrics import summarize_references
 from src.metrics import summarize_versions
+from copy import deepcopy
+
+from src.metrics import summarize_papers
+from src.metrics import summarize_source_sizes
+from src.metrics import read_events
+from src.metrics import summarize_stage_times
+from src.metrics import log_resource_results
 
 @pytest.mark.parametrize(
     "numerator, denominator, expected",
@@ -1063,3 +1070,605 @@ def test_versions_summary_empty_requires_confirmed_no_tex(error_code):
                 }
             },
         )
+
+@pytest.fixture
+def complete_paper_record():
+    return {
+        "discovery_status": "ok",
+        "expected_versions": [1],
+        "versions": {1: {"extract_status": "ok"}},
+        "references": {"status": "empty", "references": []},
+        "validation_status": "ok",
+    }
+
+
+def test_papers_summary_complete_and_missing(complete_paper_record):
+    result = summarize_papers(
+        ["a", "b"],
+        {"a": complete_paper_record},
+    )
+
+    assert result["input_paper_count"] == 2
+    assert result["complete_paper_count"] == 1
+    assert result["incomplete_paper_count"] == 1
+    assert result["paper_completion_rate"] == pytest.approx(0.5)
+    assert result["discovery_ok_count"] == 1
+    assert result["source_complete_count"] == 1
+    assert result["references_ok_count"] == 1
+    assert result["schema_ok_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("discovery_status", "failed"),
+        ("validation_status", "failed"),
+        ("references", {"status": "failed"}),
+        ("versions", {1: {"extract_status": "failed"}}),
+    ],
+)
+def test_papers_summary_requires_every_condition(
+    complete_paper_record, field, value
+):
+    record = deepcopy(complete_paper_record)
+    record[field] = value
+
+    result = summarize_papers(["a"], {"a": record})
+
+    assert result["complete_paper_count"] == 0
+    assert result["paper_completion_rate"] == 0.0
+
+
+def test_papers_summary_confirmed_no_tex_can_complete(
+    complete_paper_record,
+):
+    record = deepcopy(complete_paper_record)
+    record["versions"] = {
+        1: {
+            "extract_status": "empty",
+            "error_code": "NO_TEX_SOURCE",
+        }
+    }
+
+    result = summarize_papers(["a"], {"a": record})
+
+    assert result["source_complete_count"] == 1
+    assert result["complete_paper_count"] == 1
+
+
+def test_papers_summary_requires_all_versions(complete_paper_record):
+    record = deepcopy(complete_paper_record)
+    record["expected_versions"] = [1, 2]
+
+    result = summarize_papers(["a"], {"a": record})
+
+    assert result["source_complete_count"] == 0
+    assert result["complete_paper_count"] == 0
+
+
+def test_papers_summary_unknown_versions_cannot_complete(
+    complete_paper_record,
+):
+    record = deepcopy(complete_paper_record)
+    record["expected_versions"] = None
+    record["versions"] = {}
+
+    result = summarize_papers(["a"], {"a": record})
+
+    assert result["source_complete_count"] == 0
+    assert result["complete_paper_count"] == 0
+
+
+def test_papers_summary_empty_input():
+    result = summarize_papers([], {})
+
+    assert result["input_paper_count"] == 0
+    assert result["complete_paper_count"] == 0
+    assert result["paper_completion_rate"] is None
+
+
+@pytest.mark.parametrize("input_ids", [["a", "a"], [""], [None]])
+def test_papers_summary_rejects_invalid_ids(input_ids):
+    with pytest.raises(ValueError):
+        summarize_papers(input_ids, {})
+
+
+def test_papers_summary_rejects_unexpected_paper():
+    with pytest.raises(ValueError, match="unexpected paper"):
+        summarize_papers(["a"], {"b": {}})
+
+
+@pytest.mark.parametrize(
+    "field", ["discovery_status", "validation_status"]
+)
+def test_papers_summary_rejects_unknown_status(
+    complete_paper_record, field
+):
+    record = deepcopy(complete_paper_record)
+    record[field] = "invalid"
+
+    with pytest.raises(ValueError, match="Unknown"):
+        summarize_papers(["a"], {"a": record})
+
+def test_source_sizes_paired_measurements():
+    result = summarize_source_sizes(
+        ["a", "b", "c"],
+        {
+            "a": {
+                "size_measurement_complete": True,
+                "unpacked_total_bytes": 1000,
+                "kept_source_bytes": 200,
+            },
+            "b": {
+                "size_measurement_complete": True,
+                "unpacked_total_bytes": 3000,
+                "kept_source_bytes": 800,
+            },
+        },
+    )
+
+    assert result["size_measured_paper_count"] == 2
+    assert result["size_unmeasured_paper_count"] == 1
+    assert result["source_bytes_before_total"] == 4000
+    assert result["source_bytes_after_total"] == 1000
+    assert result["source_bytes_before_mean"] == pytest.approx(2000)
+    assert result["source_bytes_after_mean"] == pytest.approx(500)
+    assert result["source_reduction_rate"] == pytest.approx(0.75)
+
+
+def test_source_sizes_excludes_partial_measurements():
+    result = summarize_source_sizes(
+        ["a"],
+        {
+            "a": {
+                "size_measurement_complete": False,
+                "unpacked_total_bytes": 1000,
+                "kept_source_bytes": 200,
+            }
+        },
+    )
+
+    assert result["size_measured_paper_count"] == 0
+    assert result["size_unmeasured_paper_count"] == 1
+    assert result["source_bytes_before_mean"] is None
+    assert result["source_bytes_after_mean"] is None
+    assert result["source_reduction_rate"] is None
+
+
+def test_source_sizes_empty_input():
+    result = summarize_source_sizes([], {})
+
+    assert result["input_paper_count"] == 0
+    assert result["source_bytes_before_mean"] is None
+    assert result["source_bytes_after_mean"] is None
+    assert result["source_reduction_rate"] is None
+
+
+def test_source_sizes_valid_zero_measurement():
+    result = summarize_source_sizes(
+        ["a"],
+        {
+            "a": {
+                "size_measurement_complete": True,
+                "unpacked_total_bytes": 0,
+                "kept_source_bytes": 0,
+            }
+        },
+    )
+
+    assert result["size_measured_paper_count"] == 1
+    assert result["source_bytes_before_mean"] == 0.0
+    assert result["source_bytes_after_mean"] == 0.0
+    assert result["source_reduction_rate"] is None
+
+
+@pytest.mark.parametrize(
+    "before, after", [(100, 100), (100, 0)]
+)
+def test_source_sizes_reduction_boundaries(before, after):
+    result = summarize_source_sizes(
+        ["a"],
+        {
+            "a": {
+                "size_measurement_complete": True,
+                "unpacked_total_bytes": before,
+                "kept_source_bytes": after,
+            }
+        },
+    )
+
+    assert result["source_reduction_rate"] == pytest.approx(
+        (before - after) / before
+    )
+
+
+@pytest.mark.parametrize("input_ids", [["a", "a"], [""], [None]])
+def test_source_sizes_rejects_invalid_ids(input_ids):
+    with pytest.raises(ValueError):
+        summarize_source_sizes(input_ids, {})
+
+
+def test_source_sizes_rejects_unexpected_paper():
+    with pytest.raises(ValueError, match="unexpected paper"):
+        summarize_source_sizes(["a"], {"b": {}})
+
+
+@pytest.mark.parametrize("complete", [None, 1, "true"])
+def test_source_sizes_rejects_invalid_complete_flag(complete):
+    with pytest.raises(TypeError):
+        summarize_source_sizes(
+            ["a"], {"a": {"size_measurement_complete": complete}}
+        )
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [(None, 0), (100, None), (True, 0), (100, 1.5)],
+)
+def test_source_sizes_rejects_invalid_byte_types(before, after):
+    with pytest.raises(TypeError):
+        summarize_source_sizes(
+            ["a"],
+            {
+                "a": {
+                    "size_measurement_complete": True,
+                    "unpacked_total_bytes": before,
+                    "kept_source_bytes": after,
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "before, after", [(-1, 0), (100, -1), (100, 101)]
+)
+def test_source_sizes_rejects_invalid_byte_values(before, after):
+    with pytest.raises(ValueError):
+        summarize_source_sizes(
+            ["a"],
+            {
+                "a": {
+                    "size_measurement_complete": True,
+                    "unpacked_total_bytes": before,
+                    "kept_source_bytes": after,
+                }
+            },
+        )
+
+def test_read_events_reads_logger_output(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, run_id="run-01")
+    logger.log("pipeline", "started")
+    logger.log("pipeline", "finished", duration_s=1.5)
+
+    events = read_events(path)
+
+    assert len(events) == 2
+    assert [event["event"] for event in events] == [
+        "started", "finished"
+    ]
+    assert events[1]["duration_s"] == pytest.approx(1.5)
+
+
+def test_read_events_empty_file(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    assert read_events(path) == []
+
+
+def test_read_events_ignores_blank_lines(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, run_id="run-01")
+    logger.log("pipeline", "started")
+
+    text = path.read_text(encoding="utf-8")
+    path.write_text("\n" + text + "\n  \n", encoding="utf-8")
+
+    assert len(read_events(path)) == 1
+
+
+def test_read_events_reports_invalid_json_line(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = EventLogger(path, run_id="run-01")
+    logger.log("pipeline", "started")
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"incomplete":\n')
+
+    with pytest.raises(ValueError, match="Invalid JSON at line 2"):
+        read_events(path)
+
+
+@pytest.mark.parametrize("record", [[], None, "text", 123])
+def test_read_events_rejects_non_object_records(tmp_path, record):
+    path = tmp_path / "events.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="event object at line 1"):
+        read_events(path)
+
+
+@pytest.mark.parametrize(
+    "missing_key", ["run_id", "timestamp", "stage", "event"]
+)
+def test_read_events_rejects_missing_fields(tmp_path, missing_key):
+    record = {
+        "run_id": "run-01",
+        "timestamp": "2026-10-21T00:00:00+00:00",
+        "stage": "pipeline",
+        "event": "started",
+    }
+    del record[missing_key]
+
+    path = tmp_path / "events.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Missing fields at line 1"):
+        read_events(path)
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("run_id", ""),
+        ("timestamp", None),
+        ("stage", "  "),
+        ("event", 123),
+    ],
+)
+def test_read_events_rejects_invalid_required_values(
+    tmp_path, key, value
+):
+    record = {
+        "run_id": "run-01",
+        "timestamp": "2026-10-21T00:00:00+00:00",
+        "stage": "pipeline",
+        "event": "started",
+    }
+    record[key] = value
+
+    path = tmp_path / "events.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=f"Invalid {key} at line 1"):
+        read_events(path)
+
+
+def test_read_events_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        read_events(tmp_path / "missing.jsonl")
+
+def make_timed_event(operation_id, event, **fields):
+    return {
+        "run_id": "run-01",
+        "stage": "extract",
+        "event": event,
+        "operation_id": operation_id,
+        **fields,
+    }
+
+
+def test_stage_times_includes_failed_and_unfinished_operations():
+    events = [
+        make_timed_event("a", "started"),
+        make_timed_event("a", "finished", status="ok", duration_s=2.0),
+        make_timed_event("b", "started"),
+        make_timed_event("b", "finished", status="failed", duration_s=4.0),
+        make_timed_event("c", "started"),
+    ]
+
+    result = summarize_stage_times(events, "run-01", "extract")
+
+    assert result["started_operation_count"] == 3
+    assert result["finished_operation_count"] == 2
+    assert result["unfinished_operation_count"] == 1
+    assert result["successful_operation_count"] == 1
+    assert result["failed_operation_count"] == 1
+    assert result["duration_sum_s"] == pytest.approx(6.0)
+    assert result["duration_mean_s"] == pytest.approx(3.0)
+    assert result["duration_min_s"] == pytest.approx(2.0)
+    assert result["duration_max_s"] == pytest.approx(4.0)
+
+
+def test_stage_times_filters_run_and_stage():
+    events = [
+        make_timed_event("a", "started", run_id="other-run"),
+        make_timed_event("b", "started", stage="download"),
+        make_timed_event("c", "retry"),
+    ]
+
+    result = summarize_stage_times(events, "run-01", "extract")
+
+    assert result["started_operation_count"] == 0
+    assert result["duration_mean_s"] is None
+
+
+def test_stage_times_empty_input():
+    result = summarize_stage_times([], "run-01", "extract")
+
+    assert result["duration_sum_s"] == 0
+    assert result["duration_mean_s"] is None
+    assert result["duration_min_s"] is None
+    assert result["duration_max_s"] is None
+
+
+@pytest.mark.parametrize(
+    "events, message",
+    [
+        (
+            [
+                make_timed_event("a", "started"),
+                make_timed_event("a", "started"),
+            ],
+            "Duplicate operation start",
+        ),
+        (
+            [
+                make_timed_event(
+                    "a", "finished", status="ok", duration_s=1.0
+                )
+            ],
+            "without a start",
+        ),
+        (
+            [
+                make_timed_event("a", "started"),
+                make_timed_event(
+                    "a", "finished", status="ok", duration_s=1.0
+                ),
+                make_timed_event(
+                    "a", "finished", status="ok", duration_s=1.0
+                ),
+            ],
+            "Duplicate operation finish",
+        ),
+    ],
+)
+def test_stage_times_rejects_invalid_event_sequence(events, message):
+    with pytest.raises(ValueError, match=message):
+        summarize_stage_times(events, "run-01", "extract")
+
+
+@pytest.mark.parametrize("operation_id", [None, "", "  "])
+def test_stage_times_requires_operation_id(operation_id):
+    events = [make_timed_event(operation_id, "started")]
+
+    with pytest.raises(ValueError, match="operation_id"):
+        summarize_stage_times(events, "run-01", "extract")
+
+
+@pytest.mark.parametrize(
+    "key, first, second",
+    [
+        ("arxiv_id", "a", "b"),
+        ("version", 1, 2),
+    ],
+)
+def test_stage_times_rejects_mismatched_context(key, first, second):
+    events = [
+        make_timed_event("a", "started", **{key: first}),
+        make_timed_event(
+            "a",
+            "finished",
+            status="ok",
+            duration_s=1.0,
+            **{key: second},
+        ),
+    ]
+
+    with pytest.raises(ValueError, match=f"Mismatched {key}"):
+        summarize_stage_times(events, "run-01", "extract")
+
+
+@pytest.mark.parametrize("duration", [None, True, "1"])
+def test_stage_times_rejects_invalid_duration_types(duration):
+    events = [
+        make_timed_event("a", "started"),
+        make_timed_event(
+            "a", "finished", status="ok", duration_s=duration
+        ),
+    ]
+
+    with pytest.raises(TypeError):
+        summarize_stage_times(events, "run-01", "extract")
+
+
+@pytest.mark.parametrize(
+    "duration", [-1, float("nan"), float("inf")]
+)
+def test_stage_times_rejects_invalid_duration_values(duration):
+    events = [
+        make_timed_event("a", "started"),
+        make_timed_event(
+            "a", "finished", status="ok", duration_s=duration
+        ),
+    ]
+
+    with pytest.raises(ValueError):
+        summarize_stage_times(events, "run-01", "extract")
+
+
+def test_stage_times_rejects_unknown_outcome():
+    events = [
+        make_timed_event("a", "started"),
+        make_timed_event(
+            "a", "finished", status="empty", duration_s=1.0
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="Timed outcome"):
+        summarize_stage_times(events, "run-01", "extract")
+
+def test_log_resource_results_writes_samples_and_summary(tmp_path):
+    output = tmp_path / "corpus"
+    output.mkdir()
+    (output / "sample.tex").write_bytes(b"abc")
+
+    samples = [
+        {"elapsed_s": 0.0, "rss_bytes": 100, "disk_bytes": 10},
+        {"elapsed_s": 2.0, "rss_bytes": 200, "disk_bytes": 30},
+    ]
+    sampler = SimpleNamespace(
+        samples=samples,
+        summary=lambda: {
+            "sample_count": 2,
+            "sampled_duration_s": 2.0,
+            "rss_peak_bytes": 200,
+            "rss_mean_bytes": 100.0,
+            "disk_peak_bytes": 30,
+        },
+    )
+    logger = EventLogger(tmp_path / "events.jsonl", run_id="run-01")
+
+    result = log_resource_results(logger, sampler, output)
+    events = read_events(logger.path)
+
+    assert len(events) == 3
+    assert [event["event"] for event in events] == [
+        "sample", "sample", "summary"
+    ]
+    assert all(event["stage"] == "resources" for event in events)
+    assert events[0]["elapsed_s"] == 0.0
+    assert events[1]["rss_bytes"] == 200
+    assert events[-1]["output_storage_bytes"] == 3
+    assert result["disk_peak_bytes"] == 30
+    assert result["output_storage_bytes"] == 3
+
+
+def test_log_resource_results_measures_only_output_directory(tmp_path):
+    output = tmp_path / "corpus"
+    output.mkdir()
+    (output / "main.tex").write_bytes(b"abc")
+    (tmp_path / "temporary.bin").write_bytes(b"x" * 100)
+
+    sampler = SimpleNamespace(
+        samples=[],
+        summary=lambda: {
+            "sample_count": 0,
+            "sampled_duration_s": 0.0,
+            "rss_peak_bytes": None,
+            "rss_mean_bytes": None,
+            "disk_peak_bytes": None,
+        },
+    )
+    logger = EventLogger(tmp_path / "events.jsonl", run_id="run-01")
+
+    result = log_resource_results(logger, sampler, output)
+
+    assert result["output_storage_bytes"] == 3
+    assert result["rss_peak_bytes"] is None
+    assert len(read_events(logger.path)) == 1
+
+
+def test_log_resource_results_missing_output_does_not_write_log(tmp_path):
+    sampler = SimpleNamespace(
+        samples=[],
+        summary=lambda: {"sample_count": 0},
+    )
+    logger = EventLogger(tmp_path / "events.jsonl", run_id="run-01")
+
+    with pytest.raises(NotADirectoryError):
+        log_resource_results(logger, sampler, tmp_path / "missing")
+
+    assert not logger.path.exists()
