@@ -3,8 +3,10 @@
 import logging
 import math
 import time
+import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+
 
 import requests
 
@@ -43,7 +45,7 @@ class Throttle:
 
 
 ARXIV = Throttle(3.0)
-S2 = Throttle(1.0)  # 3.0 if without API key
+S2 = Throttle(1.0 if os.getenv("S2_API_KEY") else 3.0)
 
 
 def get_retry_delay(response, attempt, base_delay=1.0):
