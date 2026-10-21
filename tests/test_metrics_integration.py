@@ -1,4 +1,5 @@
 import pytest
+import json
 
 from src.metrics import (
     EventLogger,
@@ -11,6 +12,9 @@ from src.metrics import (
     summarize_source_sizes,
     summarize_stage_times,
     summarize_versions,
+    build_run_report,
+    collect_environment,
+    write_run_report,
 )
 
 
@@ -102,3 +106,29 @@ def test_metrics_pipeline_integration(tmp_path):
     ]
     assert len(resource_summaries) == 1
     assert resource_summaries[0]["output_storage_bytes"] == 3
+    report = build_run_report(
+        run_id=run_id,
+        variant="synthetic-test",
+        input_ids=[paper_id],
+        paper_results={paper_id: paper_result},
+        events=events,
+        resource_summary=resources,
+        environment=collect_environment(),
+    )
+
+    report_path = tmp_path / "metrics.json"
+    write_run_report(report_path, report)
+
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert saved["run_id"] == run_id
+    assert saved["variant"] == "synthetic-test"
+    assert saved["papers"]["complete_paper_count"] == 1
+    assert saved["versions"]["processed_version_count"] == 1
+    assert saved["references"]["reference_count"] == 1
+    assert saved["source_sizes"]["source_bytes_after_total"] == 3
+    assert saved["resources"]["output_storage_bytes"] == 3
+    assert saved["timing"]["pipeline"]["finished_operation_count"] == 1
+    assert saved["timing"]["discovery"]["finished_operation_count"] == 1
+    assert saved["timing"]["paper"]["finished_operation_count"] == 1
+    assert saved["environment"]["python_version"]
