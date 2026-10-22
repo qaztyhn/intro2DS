@@ -77,9 +77,16 @@ class HttpTests(unittest.TestCase):
             url=URL, params={"q": "test"}, headers={"User-Agent": "custom"}, timeout=5,
         )
         throttle.wait.assert_called_once_with()
-        event = hook.call_args.args[0]
+        hook.assert_called_once()
+        self.assertEqual(hook.call_args.args, ())
+        event = hook.call_args.kwargs
+        self.assertEqual(
+            set(event),
+            {"attempt", "http_status", "error_code", "error_message", "duration"},
+        )
         self.assertEqual((event["attempt"], event["http_status"]), (1, 200))
         self.assertIsNone(event["error_code"])
+        self.assertIsNone(event["error_message"])
         self.assertGreaterEqual(event["duration"], 0)
 
     def test_invalid_settings_fail_before_network_or_directory_creation(self):
@@ -230,12 +237,14 @@ class HttpTests(unittest.TestCase):
                 bad, good = response(status), response()
                 self.get.side_effect = [bad, good]
                 throttle = Mock()
-                events = []
+                hook = Mock()
                 http.download_file(URL, self.destination, max_retries=1,
-                                   throttle=throttle, on_attempt=events.append)
+                                   throttle=throttle, on_attempt=hook)
                 self.assertEqual(self.destination.read_bytes(), b"hello world")
                 self.assertEqual(self.get.call_count, 2)
                 self.assertEqual(throttle.wait.call_count, 2)
+                self.assertEqual(hook.call_count, 2)
+                events = [call.kwargs for call in hook.call_args_list]
                 self.assertEqual([event["attempt"] for event in events], [1, 2])
                 self.assertEqual([event["http_status"] for event in events], [status, 200])
                 bad.close.assert_called()
