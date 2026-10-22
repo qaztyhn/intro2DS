@@ -3,11 +3,13 @@
 import logging
 import math
 import time
+import requests
 import os
+import tempfile
+
+from pathlib import Path
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-
-import requests
 
 from .errors import (
     ClientError,
@@ -44,7 +46,7 @@ class Throttle:
 
 
 ARXIV = Throttle(3.0)
-S2 = Throttle(1.0 if os.getenv("S2_API_KEY") else 3.0)
+S2 = Throttle(1.0)  # 3.0 if without API key
 
 
 def get_retry_delay(response, attempt, base_delay=1.0):
@@ -252,3 +254,213 @@ def request_text(*args, **kwargs):
 def request_bytes(*args, **kwargs):
     """Return response bytes using the same request and retry settings."""
     return request_with_retry(*args, **kwargs).content
+
+
+
+def download_file(
+    url,
+    destination,
+    params=None,
+    headers=None,
+    timeout=30,
+    max_retries=3,
+    base_delay=1.0,
+    throttle=None,
+    on_attempt=None,
+    chunk_size=65536,
+):
+    """Download a file in chunks, retrying transient HTTP and stream failures.
+
+    Each retry downloads the file from the beginning.
+    The destination is replaced only after a successful download.
+    """
+
+    # Validate all settings before creating directories or sending requests.
+    if (
+        type(max_retries) is not int
+        or max_retries < 0
+    ):
+        raise ValueError("max_retries must be a non-negative integer")
+
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
+        raise ValueError("timeout must be finite and positive")
+
+    if (
+        isinstance(base_delay, bool)
+        or not isinstance(base_delay, (int, float))
+        or not math.isfinite(base_delay)
+        or base_delay < 0
+    ):
+        raise ValueError("base_delay must be finite and non-negative")
+
+    if type(chunk_size) is not int or chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
+
+    # Prepare the output directory and allow callers to override default headers.
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    headers = {**DEFAULT_HEADERS, **(headers or {})}
+
+    # Include the initial download plus the configured number of retries.
+    for attempt in range(max_retries + 1):
+        response = None
+        temp_path = None
+
+        # Apply rate limiting to every attempt; exclude this wait from timing.
+        if throttle is not None:
+            throttle.wait()
+
+        started = time.monotonic()
+
+        try:
+            # Stream the response so the entire file is not buffered in memory.
+            response = requests.get(
+                url=url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                stream=True,
+            )
+
+            status = response.status_code
+
+            # Classify HTTP status before reading the body.
+            error = None
+
+            if status == 408:
+                error = RequestTimeoutError()
+            elif status == 429:
+                error = RateLimitError()
+            elif 400 <= status < 500:
+                error = ClientError(status)
+            elif status >= 500:
+                error = ServerError(status)
+
+            if error is not None:
+                _emit(
+                    on_attempt,
+                    attempt,
+                    started,
+                    status=status,
+                    error_code=error.error_code,
+                )
+
+                # Release the connection before waiting to retry transient errors.
+                if status in RETRY_STATUS_CODES and attempt < max_retries:
+                    response.close()
+                    wait_before_retry(
+                        response,
+                        attempt,
+                        max_retries,
+                        base_delay,
+                        f"status={status}",
+                    )
+                    continue
+
+                raise error
+
+            # Keep the temporary file on the same filesystem for atomic replacement.
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=destination.parent,
+                prefix=destination.name + ".",
+                suffix=".part",
+                delete=False,
+            ) as file:
+                temp_path = Path(file.name)
+
+                # Write non-empty chunks to disk to keep memory usage bounded.
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        file.write(chunk)
+
+            # Atomically replace the destination after the temporary file is closed.
+            os.replace(temp_path, destination)
+            temp_path = None
+
+            _emit(
+                on_attempt,
+                attempt,
+                started,
+                status=status,
+            )
+
+            return destination
+
+        # TLS failures are reported immediately without retrying.
+        except requests.exceptions.SSLError as e:
+            _emit(
+                on_attempt,
+                attempt,
+                started,
+                error_code="NETWORK_ERROR",
+                message=str(e),
+            )
+            raise NetworkError() from e
+
+        # Retry timeouts while attempts remain, restarting from the beginning.
+        except requests.exceptions.Timeout as e:
+            _emit(
+                on_attempt,
+                attempt,
+                started,
+                error_code="TIMEOUT",
+                message=str(e),
+            )
+
+            if attempt == max_retries:
+                raise RequestTimeoutError() from e
+
+            wait_before_retry(
+                None, attempt, max_retries, base_delay, str(e)
+            )
+            continue
+
+        # Retry interrupted connections and invalid or incomplete response streams.
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ) as e:
+            _emit(
+                on_attempt,
+                attempt,
+                started,
+                error_code="NETWORK_ERROR",
+                message=str(e),
+            )
+
+            if attempt == max_retries:
+                raise NetworkError() from e
+
+            wait_before_retry(
+                None, attempt, max_retries, base_delay, str(e)
+            )
+            continue
+
+        # Map other request failures to the application error without retrying.
+        except requests.exceptions.RequestException as e:
+            _emit(
+                on_attempt,
+                attempt,
+                started,
+                error_code="REQUEST_ERROR",
+                message=str(e),
+            )
+            raise RequestError(str(e)) from e
+
+        finally:
+            # Always close the response and remove any unfinished temporary file.
+            if response is not None:
+                response.close()
+
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+    raise RuntimeError("Unexpected download retry state")
