@@ -1,6 +1,13 @@
-"""Baseline driver (minimal): discovery -> download for one run, one shared run_id and
-one events.jsonl. Extract / references / metrics will be plugged in here once the
-other modules exist.
+"""Baseline (B) pipeline driver. One run = one run_id = one events.jsonl.
+
+Papers are processed one at a time:
+    discovery -> download (every version) -> extract -> references -> storage
+and each paper ends with one "paper" event holding its total processing time.
+A failing paper is logged and the run continues with the next one.
+
+extract / references / storage are optional per-paper hooks and metrics is an optional
+resource sampler (see PAPER_STAGES and start_metrics). A module that does not define its
+function yet is logged as "skipped". Contract: docs/handover-baseline-discovery-download.md
 
     python -m src.main [path/to/config.yaml]
 """
