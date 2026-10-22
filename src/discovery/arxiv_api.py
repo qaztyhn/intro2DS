@@ -203,59 +203,76 @@ def discover_one(
     return warning
 
 
-def run_discovery(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict[str, int]:
-    """Discover every id in ``ids_file``. Returns counts per status."""
-    run_dir = cfg["output_root"] / cfg["run_id"]
-    if events is None:
-        events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
+def make_clients(cfg: Dict[str, Any], throttle: Optional[Throttle] = None):
+    """Build the arxiv client, the HTTP client and (unless given) a Throttle."""
     client = arxiv.Client(
         page_size=100,
         delay_seconds=cfg["arxiv_delay_seconds"],
         num_retries=cfg["max_retries"],
     )
     http = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"])
-    throttle = Throttle(cfg["arxiv_delay_seconds"])
+    return client, http, throttle or Throttle(cfg["arxiv_delay_seconds"])
+
+
+def discover_paper(
+    cfg: Dict[str, Any],
+    arxiv_id: str,
+    client: arxiv.Client,
+    http: RequestClient,
+    throttle: Throttle,
+    events: EventLog,
+) -> str:
+    """Discover one paper. Returns OK, FAILED or SKIPPED. Never raises for a bad paper."""
+    path = paper_dir(cfg, arxiv_id) / "metadata.json"
+    existing = read_json(path)
+    complete = (
+        existing
+        and existing.get("status") == OK
+        and (existing.get("latest_version") == 1 or existing.get("revised_dates") is not None)
+    )
+    if complete:
+        events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="metadata already ok")
+        return SKIPPED
+
+    watch = Stopwatch()
+    record = make_record(arxiv_id)
+    try:
+        warning = discover_one(arxiv_id, client, http, throttle, record)
+    except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
+        error = _classify_arxiv_error(exc)
+        record["status"] = FAILED
+        record["error_code"] = error.error_code
+        status = FAILED
+        events.log(
+            STAGE, FAILED, arxiv_id=arxiv_id, error_code=error.error_code,
+            http_status=error.http_status, attempts=error.attempts,
+            message=str(error)[:300], elapsed_seconds=watch.elapsed,
+        )
+    else:
+        status = OK
+        if warning:
+            events.log(
+                STAGE, OK, arxiv_id=arxiv_id, error_code=warning.error_code,
+                http_status=warning.http_status, attempts=warning.attempts,
+                message=f"revised_dates unavailable: {str(warning)[:250]}",
+                elapsed_seconds=watch.elapsed,
+            )
+        else:
+            events.log(STAGE, OK, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed)
+    write_json_atomic(path, record)
+    return status
+
+
+def run_discovery(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict[str, int]:
+    """Discover every id in ``ids_file``. Returns counts per status."""
+    run_dir = cfg["output_root"] / cfg["run_id"]
+    if events is None:
+        events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
+    client, http, throttle = make_clients(cfg)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        path = paper_dir(cfg, arxiv_id) / "metadata.json"
-        existing = read_json(path)
-        complete = (
-            existing
-            and existing.get("status") == OK
-            and (existing.get("latest_version") == 1 or existing.get("revised_dates") is not None)
-        )
-        if complete:
-            counts[SKIPPED] += 1
-            events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="metadata already ok")
-            continue
-
-        watch = Stopwatch()
-        record = make_record(arxiv_id)
-        try:
-            warning = discover_one(arxiv_id, client, http, throttle, record)
-        except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
-            error = _classify_arxiv_error(exc)
-            record["status"] = FAILED
-            record["error_code"] = error.error_code
-            counts[FAILED] += 1
-            events.log(
-                STAGE, FAILED, arxiv_id=arxiv_id, error_code=error.error_code,
-                http_status=error.http_status, attempts=error.attempts,
-                message=str(error)[:300], elapsed_seconds=watch.elapsed,
-            )
-        else:
-            counts[OK] += 1
-            if warning:
-                events.log(
-                    STAGE, OK, arxiv_id=arxiv_id, error_code=warning.error_code,
-                    http_status=warning.http_status, attempts=warning.attempts,
-                    message=f"revised_dates unavailable: {str(warning)[:250]}",
-                    elapsed_seconds=watch.elapsed,
-                )
-            else:
-                events.log(STAGE, OK, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed)
-        write_json_atomic(path, record)
+        counts[discover_paper(cfg, arxiv_id, client, http, throttle, events)] += 1
     return counts
 
 
