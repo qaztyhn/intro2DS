@@ -21,3 +21,8 @@ temp/
 .ipynb_checkpoints/
 
 
+
+# OS / editor
+.DS_Store
+*.tmp
+*.part
