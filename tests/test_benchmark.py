@@ -9,6 +9,10 @@ from src.benchmark import select_pilot
 import xml.etree.ElementTree as ET
 
 from src.benchmark import parse_discovery_response
+import json
+
+from src.benchmark import save_discovery_batch
+from src.benchmark import pending_discovery_ids
 
 def make_range(start_month, start_id, end_month, end_id):
     return {
@@ -497,3 +501,184 @@ def test_parse_discovery_rejects_non_feed_xml():
 def test_parse_discovery_rejects_malformed_xml():
     with pytest.raises(ET.ParseError):
         parse_discovery_response(b"<feed", ["2507.11659"])
+
+def test_save_discovery_batch_preserves_response_and_results(tmp_path):
+    xml_data = make_atom_feed(
+        make_atom_entry("http://arxiv.org/abs/2507.11659v2")
+    )
+    requested = ["2507.11659", "2507.11660"]
+
+    path = save_discovery_batch(tmp_path, requested, xml_data)
+
+    assert (path / "response.xml").read_bytes() == xml_data
+
+    request = json.loads(
+        (path / "request.json").read_text(encoding="utf-8")
+    )
+    parsed = json.loads(
+        (path / "parsed.json").read_text(encoding="utf-8")
+    )
+
+    assert request["requested_ids"] == requested
+    assert request["saved_at"]
+    assert parsed["papers"]["2507.11659"]["expected_versions"] == [1, 2]
+    assert parsed["missing_ids"] == ["2507.11660"]
+
+
+def test_save_discovery_batch_does_not_overwrite_previous_batch(tmp_path):
+    xml_data = make_atom_feed()
+
+    first = save_discovery_batch(tmp_path, ["2507.11659"], xml_data)
+    second = save_discovery_batch(tmp_path, ["2507.11660"], xml_data)
+
+    assert first != second
+    assert first.is_dir()
+    assert second.is_dir()
+
+    first_request = json.loads(
+        (first / "request.json").read_text(encoding="utf-8")
+    )
+    assert first_request["requested_ids"] == ["2507.11659"]
+
+
+def test_save_discovery_batch_keeps_raw_data_when_parsing_fails(tmp_path):
+    xml_data = b"<broken"
+
+    with pytest.raises(ET.ParseError):
+        save_discovery_batch(tmp_path, ["2507.11659"], xml_data)
+
+    batches = list(tmp_path.glob("batch-*"))
+    assert len(batches) == 1
+    assert (batches[0] / "request.json").is_file()
+    assert (batches[0] / "response.xml").read_bytes() == xml_data
+    assert not (batches[0] / "parsed.json").exists()
+
+
+@pytest.mark.parametrize("xml_data", ["<feed/>", None])
+def test_save_discovery_batch_rejects_non_bytes(tmp_path, xml_data):
+    with pytest.raises(TypeError, match="must be bytes"):
+        save_discovery_batch(tmp_path, ["2507.11659"], xml_data)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "requested_ids",
+    [["2507.11659", "2507.11659"], [""], [None]],
+)
+def test_save_discovery_batch_validates_ids_before_writing(
+    tmp_path, requested_ids
+):
+    with pytest.raises(ValueError):
+        save_discovery_batch(tmp_path, requested_ids, make_atom_feed())
+
+    assert list(tmp_path.iterdir()) == []
+
+def test_pending_ids_excludes_complete_metadata(tmp_path):
+    save_discovery_batch(
+        tmp_path,
+        ["2507.11659", "2507.11660"],
+        make_atom_feed(
+            make_atom_entry("http://arxiv.org/abs/2507.11659v2")
+        ),
+    )
+
+    assert pending_discovery_ids(
+        ["2507.11659", "2507.11660", "2507.11661"], tmp_path
+    ) == ["2507.11660", "2507.11661"]
+
+
+def test_pending_ids_keeps_incomplete_metadata(tmp_path):
+    save_discovery_batch(
+        tmp_path,
+        ["2507.11659"],
+        make_atom_feed(
+            make_atom_entry(
+                "http://arxiv.org/abs/2507.11659v1",
+                title="",
+            )
+        ),
+    )
+
+    assert pending_discovery_ids(
+        ["2507.11659"], tmp_path
+    ) == ["2507.11659"]
+
+
+def test_pending_ids_ignores_unparsed_batch(tmp_path):
+    with pytest.raises(ET.ParseError):
+        save_discovery_batch(
+            tmp_path, ["2507.11659"], b"<broken"
+        )
+
+    assert pending_discovery_ids(
+        ["2507.11659"], tmp_path
+    ) == ["2507.11659"]
+
+
+def test_pending_ids_does_not_downgrade_complete_result(tmp_path):
+    save_discovery_batch(
+        tmp_path,
+        ["2507.11659"],
+        make_atom_feed(
+            make_atom_entry("http://arxiv.org/abs/2507.11659v1")
+        ),
+    )
+    save_discovery_batch(
+        tmp_path,
+        ["2507.11659"],
+        make_atom_feed(),
+    )
+
+    assert pending_discovery_ids(["2507.11659"], tmp_path) == []
+
+
+def test_pending_ids_missing_directory_preserves_input_order(tmp_path):
+    ids = ["2507.11661", "2507.11659"]
+
+    assert pending_discovery_ids(ids, tmp_path / "missing") == ids
+
+
+def test_pending_ids_rejects_file_as_directory(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_text("test", encoding="utf-8")
+
+    with pytest.raises(NotADirectoryError):
+        pending_discovery_ids(["2507.11659"], path)
+
+
+@pytest.mark.parametrize(
+    "ids", [["a", "a"], [""], [None]]
+)
+def test_pending_ids_rejects_invalid_input(tmp_path, ids):
+    with pytest.raises(ValueError):
+        pending_discovery_ids(ids, tmp_path)
+
+
+def test_pending_ids_reports_corrupt_cached_json(tmp_path):
+    path = save_discovery_batch(
+        tmp_path, ["2507.11659"], make_atom_feed()
+    )
+    (path / "parsed.json").write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        pending_discovery_ids(["2507.11659"], tmp_path)
+
+
+def test_pending_ids_rejects_unrequested_cached_paper(tmp_path):
+    path = save_discovery_batch(
+        tmp_path, ["2507.11659"], make_atom_feed()
+    )
+    (path / "parsed.json").write_text(
+        json.dumps({
+            "papers": {
+                "2507.11660": {
+                    "verification_status": "metadata_present"
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="was not requested"):
+        pending_discovery_ids(["2507.11659"], tmp_path)
