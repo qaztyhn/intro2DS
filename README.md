@@ -58,16 +58,21 @@ python -m src.main                      # uses configs/baseline.yaml
 python -m src.main configs/other.yaml   # uses another config
 ```
 
-Results are written to `experiments/<run_id>/` (not tracked by git):
+## Pipeline and module contract
 
-```
-experiments/<run_id>/
-  run.json                      # config of the run
-  events.jsonl                  # one JSON line per event (status, error_code, elapsed_seconds)
-  papers/<paper_key>/
-    metadata.json               # title, authors, dates, version list
-    versions/v<N>/manifest.json # download status and source format of each version
-  tmp/                          # downloaded archives (temporary)
-```
+`src.main` processes one paper at a time: discovery -> download (every version) -> extract -> references -> storage.
+Each paper ends with one `paper` event (status, total seconds). One failing paper never stops the run.
 
-`paper_key` is the arXiv id with `.` replaced by `-` and `/` by `__` (e.g. `2507-01659`).
+| Module | Function | Called as |
+|---|---|---|
+| `src/extract.py` | `extract_paper` | `extract_paper(cfg, arxiv_id, events)` |
+| `src/references.py` | `references_paper` | `references_paper(cfg, arxiv_id, events)` |
+| `src/storage.py` | `store_paper` | `store_paper(cfg, arxiv_id, events)` |
+| `src/metrics.py` | `start_sampler` | `start_sampler(cfg, run_dir)` returns an object with `.stop()` |
+
+Rules for hooks: idempotent (skip work already done on resume), log with `events.log(stage, status, arxiv_id=..., ...)`,
+raise on unexpected errors (the driver logs them and continues), read inputs from `<run_dir>/papers/<paper_key>/`.
+A module that is missing its function is logged as `skipped`.
+
+`run.json` records `started_at`, `finished_at`, `run_status` (`running`, `completed`, `interrupted`, `crashed`),
+`cache_mode` (`cold` for a new run, `warm` when resuming), `input_ids` and the environment.

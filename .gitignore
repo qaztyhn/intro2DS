@@ -30,3 +30,6 @@ temp/
 # local test configs
 configs/test*.yaml
 configs/ids_err.txt
+
+configs/test_ids*.txt
+configs/test_*.yaml
