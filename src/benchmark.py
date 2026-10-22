@@ -5,6 +5,13 @@ import random
 import hashlib
 import re
 import xml.etree.cElementTree as ET
+from pathlib import Path
+from datetime import timezone
+from uuid import uuid4
+
+import json
+
+from .metrics import write_run_report
 
 
 def parse_month(value: str) -> tuple[int, int]:
@@ -284,3 +291,87 @@ def parse_discovery_response(
         ],
         "unexpected_ids": unexpected_ids,
     }
+
+def save_discovery_batch(
+    directory: str | Path,
+    requested_ids: list[str],
+    xml_data: bytes,
+) -> Path:
+    """Preserve one response and its parsed result in a unique directory."""
+    if not isinstance(xml_data, bytes):
+        raise TypeError("XML response must be bytes")
+
+    ids = list(requested_ids)
+    if any(not isinstance(pid, str) or not pid.strip() for pid in ids):
+        raise ValueError("Requested IDs must be non-empty strings")
+    if len(ids) != len(set(ids)):
+        raise ValueError("Requested IDs must be unique")
+
+    batch_dir = Path(directory) / f"batch-{uuid4().hex}"
+    batch_dir.mkdir(parents=True, exist_ok=False)
+
+    write_run_report(
+        batch_dir / "request.json",
+        {
+            "requested_ids": ids,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    (batch_dir / "response.xml").write_bytes(xml_data)
+
+    parsed = parse_discovery_response(xml_data, ids)
+    write_run_report(batch_dir / "parsed.json", parsed)
+
+    return batch_dir
+
+def pending_discovery_ids(
+    input_ids: list[str],
+    batches_directory: str | Path,
+) -> list[str]:
+    """Return IDs without a saved, complete metadata record."""
+    ids = list(input_ids)
+
+    if any(not isinstance(pid, str) or not pid.strip() for pid in ids):
+        raise ValueError("Input IDs must be non-empty strings")
+    if len(ids) != len(set(ids)):
+        raise ValueError("Input IDs must be unique")
+
+    root = Path(batches_directory)
+    if not root.exists():
+        return ids
+    if not root.is_dir():
+        raise NotADirectoryError(str(root))
+
+    completed = set()
+
+    for batch_dir in sorted(root.glob("batch-*")):
+        if not batch_dir.is_dir():
+            continue
+
+        required_files = [
+            batch_dir / "request.json",
+            batch_dir / "response.xml",
+            batch_dir / "parsed.json",
+        ]
+        if not all(path.is_file() for path in required_files):
+            continue
+
+        request = json.loads(
+            (batch_dir / "request.json").read_text(encoding="utf-8")
+        )
+        parsed = json.loads(
+            (batch_dir / "parsed.json").read_text(encoding="utf-8")
+        )
+
+        requested = set(request["requested_ids"])
+
+        for paper_id, record in parsed["papers"].items():
+            if paper_id not in requested:
+                raise ValueError(
+                    f"Cached result was not requested: {paper_id}"
+                )
+
+            if record["verification_status"] == "metadata_present":
+                completed.add(paper_id)
+
+    return [paper_id for paper_id in ids if paper_id not in completed]
