@@ -12,6 +12,8 @@ from uuid import uuid4
 import json
 
 from .metrics import write_run_report
+import tarfile
+
 
 
 def parse_month(value: str) -> tuple[int, int]:
@@ -375,3 +377,113 @@ def pending_discovery_ids(
                 completed.add(paper_id)
 
     return [paper_id for paper_id in ids if paper_id not in completed]
+
+def inspect_tar_source(path: str | Path) -> dict:
+    """Inspect a tar source without extracting files to disk."""
+    path = Path(path)
+
+    def file_sha256(handle):
+        digest = hashlib.sha256()
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+        return digest.hexdigest()
+
+    with path.open("rb") as handle:
+        archive_hash = file_sha256(handle)
+
+    with tarfile.open(path, "r:*") as archive:
+        members = archive.getmembers()
+        regular_files = [member for member in members if member.isfile()]
+        source_files = []
+
+        for member in regular_files:
+            extension = Path(member.name).suffix.lower()
+            if extension not in {".tex", ".bib"}:
+                continue
+
+            handle = archive.extractfile(member)
+            if handle is None:
+                raise ValueError(f"Cannot read source member: {member.name}")
+
+            with handle:
+                content_hash = file_sha256(handle)
+
+            source_files.append({
+                "path": member.name,
+                "bytes": member.size,
+                "sha256": content_hash,
+            })
+
+    return {
+        "inspection_method": "tar_regular_members",
+        "archive_bytes": path.stat().st_size,
+        "archive_sha256": archive_hash,
+        "regular_file_count": len(regular_files),
+        "unpacked_total_bytes": sum(m.size for m in regular_files),
+        "kept_source_bytes": sum(item["bytes"] for item in source_files),
+        "tex_count": sum(
+            Path(item["path"]).suffix.lower() == ".tex"
+            for item in source_files
+        ),
+        "bib_count": sum(
+            Path(item["path"]).suffix.lower() == ".bib"
+            for item in source_files
+        ),
+        "contains_links": any(
+            member.issym() or member.islnk() for member in members
+        ),
+        "source_files": sorted(source_files, key=lambda item: item["path"]),
+    }
+
+def inspect_reference_page(payload: dict, expected_offset: int) -> dict:
+    """Validate and count one raw Semantic Scholar reference page."""
+    if not isinstance(payload, dict):
+        raise ValueError("Reference page must be an object")
+
+    offset = payload.get("offset")
+    if type(offset) is not int or offset != expected_offset:
+        raise ValueError("Unexpected reference page offset")
+
+    entries = payload.get("data")
+    if not isinstance(entries, list):
+        raise ValueError("Reference page data must be a list")
+
+    next_offset = payload.get("next")
+    if next_offset is not None:
+        if type(next_offset) is not int or next_offset <= offset:
+            raise ValueError("Next offset must move forward")
+        if not entries:
+            raise ValueError("Empty page cannot have a next offset")
+
+    resolved_count = 0
+    with_arxiv_id_count = 0
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Reference entries must be objects")
+
+        paper = entry.get("citedPaper")
+        if paper is None:
+            continue
+        if not isinstance(paper, dict):
+            raise ValueError("citedPaper must be an object or null")
+
+        resolved_count += 1
+        external_ids = paper.get("externalIds")
+        arxiv_id = (
+            external_ids.get("ArXiv")
+            if isinstance(external_ids, dict)
+            else None
+        )
+        if isinstance(arxiv_id, str) and arxiv_id.strip():
+            with_arxiv_id_count += 1
+
+    return {
+        "offset": offset,
+        "next_offset": next_offset,
+        "raw_entry_count": len(entries),
+        "resolved_entry_count": resolved_count,
+        "unresolved_entry_count": len(entries) - resolved_count,
+        "with_arxiv_id_count": with_arxiv_id_count,
+        "is_last_page": next_offset is None,
+    }
