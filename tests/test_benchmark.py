@@ -13,6 +13,12 @@ import json
 
 from src.benchmark import save_discovery_batch
 from src.benchmark import pending_discovery_ids
+import hashlib
+import io
+import tarfile
+
+from src.benchmark import inspect_tar_source
+from src.benchmark import inspect_reference_page
 
 def make_range(start_month, start_id, end_month, end_id):
     return {
@@ -682,3 +688,165 @@ def test_pending_ids_rejects_unrequested_cached_paper(tmp_path):
 
     with pytest.raises(ValueError, match="was not requested"):
         pending_discovery_ids(["2507.11659"], tmp_path)
+
+def create_test_tar(path, files):
+    with tarfile.open(path, "w:gz") as archive:
+        for name, content in files.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+
+
+def test_inspect_tar_sizes_paths_and_hashes(tmp_path):
+    path = tmp_path / "sample.source"
+    files = {
+        "main.tex": b"abc",
+        "sections/intro.tex": b"hello",
+        "refs.bib": b"xy",
+        "figure.png": b"1234567",
+    }
+    create_test_tar(path, files)
+
+    result = inspect_tar_source(path)
+
+    assert result["regular_file_count"] == 4
+    assert result["unpacked_total_bytes"] == 17
+    assert result["kept_source_bytes"] == 10
+    assert result["tex_count"] == 2
+    assert result["bib_count"] == 1
+    assert result["contains_links"] is False
+    assert result["archive_bytes"] == path.stat().st_size
+    assert result["archive_sha256"] == hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+    sources = {item["path"]: item for item in result["source_files"]}
+    assert set(sources) == {
+        "main.tex", "sections/intro.tex", "refs.bib"
+    }
+
+    for name, item in sources.items():
+        assert item["bytes"] == len(files[name])
+        assert item["sha256"] == hashlib.sha256(files[name]).hexdigest()
+
+    # Inspection must not extract archive members.
+    assert not (tmp_path / "main.tex").exists()
+    assert not (tmp_path / "sections").exists()
+
+
+def test_inspect_tar_without_tex_or_bib(tmp_path):
+    path = tmp_path / "sample.source"
+    create_test_tar(path, {"paper.pdf": b"pdf-data"})
+
+    result = inspect_tar_source(path)
+
+    assert result["tex_count"] == 0
+    assert result["bib_count"] == 0
+    assert result["kept_source_bytes"] == 0
+    assert result["source_files"] == []
+
+
+def test_inspect_tar_detects_links_without_following_them(tmp_path):
+    path = tmp_path / "sample.source"
+
+    with tarfile.open(path, "w") as archive:
+        member = tarfile.TarInfo("linked.tex")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "outside.tex"
+        archive.addfile(member)
+
+    result = inspect_tar_source(path)
+
+    assert result["contains_links"] is True
+    assert result["regular_file_count"] == 0
+    assert result["source_files"] == []
+
+
+def test_inspect_tar_rejects_non_tar_data(tmp_path):
+    path = tmp_path / "sample.source"
+    path.write_bytes(b"not an archive")
+
+    with pytest.raises(tarfile.ReadError):
+        inspect_tar_source(path)
+
+
+def test_inspect_tar_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        inspect_tar_source(tmp_path / "missing.source")
+
+def test_reference_page_counts_raw_and_resolved_entries():
+    payload = {
+        "offset": 0,
+        "data": [
+            {"citedPaper": {"externalIds": {"ArXiv": "2501.00001"}}},
+            {"citedPaper": {"externalIds": {}}},
+            {"citedPaper": None},
+        ],
+    }
+
+    result = inspect_reference_page(payload, 0)
+
+    assert result["raw_entry_count"] == 3
+    assert result["resolved_entry_count"] == 2
+    assert result["unresolved_entry_count"] == 1
+    assert result["with_arxiv_id_count"] == 1
+    assert result["is_last_page"] is True
+
+
+def test_reference_page_valid_continuation():
+    result = inspect_reference_page(
+        {
+            "offset": 10,
+            "next": 20,
+            "data": [{"citedPaper": None}],
+        },
+        expected_offset=10,
+    )
+
+    assert result["next_offset"] == 20
+    assert result["is_last_page"] is False
+
+
+def test_reference_page_valid_empty_final_page():
+    result = inspect_reference_page({"offset": 0, "data": []}, 0)
+
+    assert result["raw_entry_count"] == 0
+    assert result["is_last_page"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {"data": []},
+        {"offset": True, "data": []},
+        {"offset": 1, "data": []},
+        {"offset": 0, "data": None},
+        {"offset": 0, "next": 0, "data": [{}]},
+        {"offset": 0, "next": True, "data": [{}]},
+        {"offset": 0, "next": 10, "data": []},
+        {"offset": 0, "data": ["invalid"]},
+        {"offset": 0, "data": [{"citedPaper": "invalid"}]},
+    ],
+)
+def test_reference_page_rejects_invalid_payload(payload):
+    with pytest.raises(ValueError):
+        inspect_reference_page(payload, expected_offset=0)
+
+
+@pytest.mark.parametrize(
+    "external_ids",
+    [None, {}, {"ArXiv": ""}, {"ArXiv": "  "}, {"ArXiv": 123}],
+)
+def test_reference_page_does_not_count_missing_arxiv_id(external_ids):
+    result = inspect_reference_page(
+        {
+            "offset": 0,
+            "data": [{"citedPaper": {"externalIds": external_ids}}],
+        },
+        0,
+    )
+
+    assert result["resolved_entry_count"] == 1
+    assert result["with_arxiv_id_count"] == 0

@@ -1,6 +1,17 @@
 {
   "schema_version": "1.0",
   "seed": 42,
+  "month_last_ids": {
+  "2025-07": 23787
+  },
+  "month_boundary_provenance": {
+  "2025-07": {
+    "method": "inferred_from_assignment",
+    "assigned_range_id": "R4",
+    "assigned_count": 5000,
+    "note": "Derived from inclusive R4 bounds and exact assigned ID count; sampled IDs require metadata verification."
+    }
+},
   "bounds_inclusive": true,
   "benchmark_size": 1000,
   "pilot_size": 40,
