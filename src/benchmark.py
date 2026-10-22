@@ -3,6 +3,8 @@
 from datetime import datetime
 import random
 import hashlib
+import re
+import xml.etree.cElementTree as ET
 
 
 def parse_month(value: str) -> tuple[int, int]:
@@ -204,3 +206,81 @@ def select_pilot(
         )
 
     return selected
+
+def parse_discovery_response(
+    xml_data: bytes,
+    requested_ids: list[str],
+) -> dict:
+    """Parse an Atom response without treating absent IDs as nonexistent."""
+    if len(requested_ids) != len(set(requested_ids)):
+        raise ValueError("Requested IDs must be unique")
+
+    root = ET.fromstring(xml_data)
+    atom = "{http://www.w3.org/2005/Atom}"
+
+    if root.tag != f"{atom}feed":
+        raise ValueError("Expected an Atom feed")
+
+    papers = {}
+    unexpected_ids = []
+
+    for entry in root.findall(f"{atom}entry"):
+        identifier = entry.findtext(f"{atom}id", default="").strip()
+
+        match = re.fullmatch(
+            r"https?://arxiv\.org/abs/(\d{4}\.\d{5})v([1-9]\d*)",
+            identifier,
+        )
+        if match is None:
+            raise ValueError(f"Unexpected entry identifier: {identifier}")
+
+        paper_id = match.group(1)
+        latest_version = int(match.group(2))
+
+        if paper_id not in requested_ids:
+            unexpected_ids.append(paper_id)
+            continue
+        if paper_id in papers:
+            raise ValueError(f"Duplicate returned ID: {paper_id}")
+
+        title = " ".join(
+            entry.findtext(f"{atom}title", default="").split()
+        )
+        published = entry.findtext(f"{atom}published", default="").strip()
+        authors = [
+            author.findtext(f"{atom}name", default="").strip()
+            for author in entry.findall(f"{atom}author")
+        ]
+        authors = [name for name in authors if name]
+
+        missing_fields = [
+            name
+            for name, value in {
+                "title": title,
+                "submission_date": published,
+                "authors": authors,
+            }.items()
+            if not value
+        ]
+
+        papers[paper_id] = {
+            "arxiv_id": paper_id,
+            "title": title or None,
+            "authors": authors,
+            "submission_date": published or None,
+            "latest_version": latest_version,
+            "expected_versions": list(range(1, latest_version + 1)),
+            "verification_status": (
+                "metadata_incomplete" if missing_fields else "metadata_present"
+            ),
+            "missing_fields": missing_fields,
+        }
+
+    return {
+        "papers": papers,
+        "missing_ids": [
+            paper_id for paper_id in requested_ids
+            if paper_id not in papers
+        ],
+        "unexpected_ids": unexpected_ids,
+    }

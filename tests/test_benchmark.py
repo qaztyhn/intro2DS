@@ -6,7 +6,9 @@ from copy import deepcopy
 
 from src.benchmark import select_benchmark
 from src.benchmark import select_pilot
+import xml.etree.ElementTree as ET
 
+from src.benchmark import parse_discovery_response
 
 def make_range(start_month, start_id, end_month, end_id):
     return {
@@ -353,3 +355,145 @@ def test_pilot_rejects_invalid_size_type(synthetic_benchmark, size):
 def test_pilot_rejects_invalid_seed_type(synthetic_benchmark, seed):
     with pytest.raises(TypeError):
         select_pilot(synthetic_benchmark, 40, seed=seed)
+
+def make_atom_entry(
+    identifier,
+    title="Synthetic title",
+    published="2025-07-15T12:00:00Z",
+    author="Example Author",
+):
+    return f"""
+    <entry>
+      <id>{identifier}</id>
+      <title>{title}</title>
+      <published>{published}</published>
+      <author><name>{author}</name></author>
+    </entry>
+    """
+
+
+def make_atom_feed(*entries):
+    return (
+        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        + "".join(entries)
+        + "</feed>"
+    ).encode("utf-8")
+
+
+def test_parse_discovery_metadata_and_missing_id():
+    response = make_atom_feed(
+        make_atom_entry("http://arxiv.org/abs/2507.11659v2")
+    )
+
+    result = parse_discovery_response(
+        response, ["2507.11659", "2507.11660"]
+    )
+
+    paper = result["papers"]["2507.11659"]
+    assert paper["expected_versions"] == [1, 2]
+    assert paper["latest_version"] == 2
+    assert paper["authors"] == ["Example Author"]
+    assert paper["verification_status"] == "metadata_present"
+    assert result["missing_ids"] == ["2507.11660"]
+    assert result["unexpected_ids"] == []
+
+
+def test_parse_discovery_matches_ids_not_response_order():
+    response = make_atom_feed(
+        make_atom_entry("https://arxiv.org/abs/2507.11660v1"),
+        make_atom_entry("https://arxiv.org/abs/2507.11659v3"),
+    )
+
+    result = parse_discovery_response(
+        response, ["2507.11659", "2507.11660"]
+    )
+
+    assert result["papers"]["2507.11659"]["latest_version"] == 3
+    assert result["papers"]["2507.11660"]["latest_version"] == 1
+    assert result["missing_ids"] == []
+
+
+def test_parse_discovery_empty_feed_keeps_all_ids_missing():
+    result = parse_discovery_response(
+        make_atom_feed(), ["2507.11659"]
+    )
+
+    assert result["papers"] == {}
+    assert result["missing_ids"] == ["2507.11659"]
+
+
+def test_parse_discovery_records_unexpected_id():
+    response = make_atom_feed(
+        make_atom_entry("http://arxiv.org/abs/2507.11660v1")
+    )
+
+    result = parse_discovery_response(response, ["2507.11659"])
+
+    assert result["papers"] == {}
+    assert result["missing_ids"] == ["2507.11659"]
+    assert result["unexpected_ids"] == ["2507.11660"]
+
+
+@pytest.mark.parametrize(
+    "field, expected_missing",
+    [
+        ("title", "title"),
+        ("published", "submission_date"),
+        ("author", "authors"),
+    ],
+)
+def test_parse_discovery_marks_missing_metadata(field, expected_missing):
+    response = make_atom_feed(
+        make_atom_entry(
+            "http://arxiv.org/abs/2507.11659v1",
+            **{field: ""},
+        )
+    )
+
+    result = parse_discovery_response(response, ["2507.11659"])
+    paper = result["papers"]["2507.11659"]
+
+    assert paper["verification_status"] == "metadata_incomplete"
+    assert paper["missing_fields"] == [expected_missing]
+
+
+def test_parse_discovery_rejects_duplicate_requested_ids():
+    with pytest.raises(ValueError, match="Requested IDs must be unique"):
+        parse_discovery_response(
+            make_atom_feed(), ["2507.11659", "2507.11659"]
+        )
+
+
+def test_parse_discovery_rejects_duplicate_returned_ids():
+    entry = make_atom_entry("http://arxiv.org/abs/2507.11659v1")
+
+    with pytest.raises(ValueError, match="Duplicate returned ID"):
+        parse_discovery_response(
+            make_atom_feed(entry, entry), ["2507.11659"]
+        )
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "http://arxiv.org/abs/2507.11659",
+        "http://arxiv.org/abs/2507.11659v0",
+        "http://arxiv.org/api/errors",
+    ],
+)
+def test_parse_discovery_rejects_unusable_identifiers(identifier):
+    with pytest.raises(ValueError, match="Unexpected entry identifier"):
+        parse_discovery_response(
+            make_atom_feed(make_atom_entry(identifier)),
+            ["2507.11659"],
+        )
+
+
+def test_parse_discovery_rejects_non_feed_xml():
+    with pytest.raises(ValueError, match="Expected an Atom feed"):
+        parse_discovery_response(b"<html/>", ["2507.11659"])
+
+
+def test_parse_discovery_rejects_malformed_xml():
+    with pytest.raises(ET.ParseError):
+        parse_discovery_response(b"<feed", ["2507.11659"])
