@@ -1,3 +1,2 @@
-psutil==7.2.2
-pytest==9.1.1
+-r src/requirements.txt
 certifi==2026.10.19

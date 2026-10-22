@@ -32,11 +32,47 @@ The crawler supports:
 
 ## Installation
 
+Requires Python 3.10+.
+
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r src/requirements.txt
 ```
+
+## Configuration
+
+All settings of a run are read from `configs/baseline.yaml`.
+
+- `user_agent`: put a real contact email in it (arXiv asks for a descriptive User-Agent).
+- `ids_file`: text file with one base arXiv id per line (no `vN` suffix; blank lines and `#` lines are ignored).
+  - `configs/ids.txt`: small test set (first 20 ids of the assigned range).
+  - `configs/ids_full.txt`: the full assigned range (2507.01659 to 2507.06658).
+- `run_id`: `B_{timestamp}` starts a new run each time. Set a fixed value such as `B_run01` to resume an interrupted run: versions already `ok` are skipped and failed ones are retried.
+- `arxiv_delay_seconds`: pause between arXiv requests (keep at 3 or more).
 
 ## Usage
 
-Usage instructions will be added after the baseline crawler is implemented.
+```bash
+python -m src.main                      # uses configs/baseline.yaml
+python -m src.main configs/other.yaml   # uses another config
+```
 
+## Pipeline and module contract
+
+`src.main` processes one paper at a time: discovery -> download (every version) -> extract -> references -> storage.
+Each paper ends with one `paper` event (status, total seconds). One failing paper never stops the run.
+
+| Module | Function | Called as |
+|---|---|---|
+| `src/extract.py` | `extract_paper` | `extract_paper(cfg, arxiv_id, events)` |
+| `src/references.py` | `references_paper` | `references_paper(cfg, arxiv_id, events)` |
+| `src/storage.py` | `store_paper` | `store_paper(cfg, arxiv_id, events)` |
+| `src/metrics.py` | `start_sampler` | `start_sampler(cfg, run_dir)` returns an object with `.stop()` |
+
+Rules for hooks: idempotent (skip work already done on resume), log with `events.log(stage, status, arxiv_id=..., ...)`,
+raise on unexpected errors (the driver logs them and continues), read inputs from `<run_dir>/papers/<paper_key>/`.
+A module that is missing its function is logged as `skipped`.
+
+`run.json` records `started_at`, `finished_at`, `run_status` (`running`, `completed`, `interrupted`, `crashed`),
+`cache_mode` (`cold` for a new run, `warm` when resuming), `input_ids` and the environment.
