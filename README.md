@@ -32,11 +32,42 @@ The crawler supports:
 
 ## Installation
 
+Requires Python 3.10+.
+
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r src/requirements.txt
 ```
+
+## Configuration
+
+All settings of a run are read from `configs/baseline.yaml`.
+
+- `user_agent`: put a real contact email in it (arXiv asks for a descriptive User-Agent).
+- `ids_file`: text file with one base arXiv id per line (no `vN` suffix; blank lines and `#` lines are ignored).
+  - `configs/ids.txt`: small test set (first 20 ids of the assigned range).
+  - `configs/ids_full.txt`: the full assigned range (2507.01659 to 2507.06658).
+- `run_id`: `B_{timestamp}` starts a new run each time. Set a fixed value such as `B_run01` to resume an interrupted run: versions already `ok` are skipped and failed ones are retried.
+- `arxiv_delay_seconds`: pause between arXiv requests (keep at 3 or more).
 
 ## Usage
 
-Usage instructions will be added after the baseline crawler is implemented.
+```bash
+python -m src.main                      # uses configs/baseline.yaml
+python -m src.main configs/other.yaml   # uses another config
+```
 
+Results are written to `experiments/<run_id>/` (not tracked by git):
+
+```
+experiments/<run_id>/
+  run.json                      # config of the run
+  events.jsonl                  # one JSON line per event (status, error_code, elapsed_seconds)
+  papers/<paper_key>/
+    metadata.json               # title, authors, dates, version list
+    versions/v<N>/manifest.json # download status and source format of each version
+  tmp/                          # downloaded archives (temporary)
+```
+
+`paper_key` is the arXiv id with `.` replaced by `-` and `/` by `__` (e.g. `2507-01659`).
