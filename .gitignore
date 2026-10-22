@@ -26,3 +26,7 @@ temp/
 .DS_Store
 *.tmp
 *.part
+
+# local test configs
+configs/test*.yaml
+configs/ids_err.txt
