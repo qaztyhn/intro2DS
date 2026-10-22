@@ -1,1 +1,2 @@
 -r src/requirements.txt
+certifi==2026.10.19
