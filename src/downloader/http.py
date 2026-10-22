@@ -140,54 +140,65 @@ def download_version(
     return manifest
 
 
+def download_paper(
+    cfg: Dict[str, Any], arxiv_id: str, client: RequestClient, throttle: Throttle, events: EventLog
+) -> Dict[str, int]:
+    """Download every version of one paper. Returns counts per status (one per version)."""
+    run_dir = cfg["output_root"] / cfg["run_id"]
+    key = paper_key(arxiv_id)
+    counts = {OK: 0, FAILED: 0, SKIPPED: 0}
+
+    metadata = read_json(run_dir / "papers" / key / "metadata.json")
+    if not metadata or metadata.get("status") != OK or not metadata.get("versions"):
+        counts[SKIPPED] += 1
+        events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="discovery not ok; no version list")
+        return counts
+
+    for version in metadata["versions"]:
+        manifest_path = run_dir / "papers" / key / "versions" / f"v{version}" / "manifest.json"
+        existing = read_json(manifest_path)
+        if existing and existing.get("download_status") == OK:
+            counts[SKIPPED] += 1
+            events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, version=version, message="already downloaded")
+            continue
+
+        watch = Stopwatch()
+        try:
+            manifest = download_version(cfg, client, throttle, arxiv_id, version)
+        except Exception as exc:  # noqa: BLE001 - one version must never stop the run
+            error = exc if isinstance(exc, PipelineError) else PipelineError(INVALID_RESPONSE, repr(exc))
+            if not isinstance(exc, PipelineError):  # unexpected bug: still leave a manifest behind
+                failed = make_manifest(arxiv_id, version)
+                failed["error_code"] = error.error_code
+                write_json_atomic(manifest_path, failed)
+            counts[FAILED] += 1
+            events.log(
+                STAGE, FAILED, arxiv_id=arxiv_id, version=version, error_code=error.error_code,
+                http_status=error.http_status, attempts=error.attempts,
+                message=str(error)[:300], elapsed_seconds=watch.elapsed,
+            )
+        else:
+            counts[OK] += 1
+            events.log(
+                STAGE, OK, arxiv_id=arxiv_id, version=version, elapsed_seconds=watch.elapsed,
+                message=f"{manifest['source_format']}, {manifest['archive_bytes']} bytes",
+            )
+    return counts
+
+
 def run_download(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict[str, int]:
-    """Download every version of every paper whose discovery status is ok.
-    Returns counts per status (one count per version)."""
+    """Download every version of every paper whose discovery status is ok."""
     run_dir = cfg["output_root"] / cfg["run_id"]
     if events is None:
         events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
     client = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"])
     throttle = Throttle(cfg["arxiv_delay_seconds"])
 
-    counts = {OK: 0, FAILED: 0, SKIPPED: 0}
+    totals = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        key = paper_key(arxiv_id)
-        metadata = read_json(run_dir / "papers" / key / "metadata.json")
-        if not metadata or metadata.get("status") != OK or not metadata.get("versions"):
-            counts[SKIPPED] += 1
-            events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="discovery not ok; no version list")
-            continue
-
-        for version in metadata["versions"]:
-            manifest_path = run_dir / "papers" / key / "versions" / f"v{version}" / "manifest.json"
-            existing = read_json(manifest_path)
-            if existing and existing.get("download_status") == OK:
-                counts[SKIPPED] += 1
-                events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, version=version, message="already downloaded")
-                continue
-
-            watch = Stopwatch()
-            try:
-                manifest = download_version(cfg, client, throttle, arxiv_id, version)
-            except Exception as exc:  # noqa: BLE001 - one version must never stop the run
-                error = exc if isinstance(exc, PipelineError) else PipelineError(INVALID_RESPONSE, repr(exc))
-                if not isinstance(exc, PipelineError):  # unexpected bug: still leave a manifest behind
-                    failed = make_manifest(arxiv_id, version)
-                    failed["error_code"] = error.error_code
-                    write_json_atomic(manifest_path, failed)
-                counts[FAILED] += 1
-                events.log(
-                    STAGE, FAILED, arxiv_id=arxiv_id, version=version, error_code=error.error_code,
-                    http_status=error.http_status, attempts=error.attempts,
-                    message=str(error)[:300], elapsed_seconds=watch.elapsed,
-                )
-            else:
-                counts[OK] += 1
-                events.log(
-                    STAGE, OK, arxiv_id=arxiv_id, version=version, elapsed_seconds=watch.elapsed,
-                    message=f"{manifest['source_format']}, {manifest['archive_bytes']} bytes",
-                )
-    return counts
+        for status, n in download_paper(cfg, arxiv_id, client, throttle, events).items():
+            totals[status] += n
+    return totals
 
 
 def main() -> None:
