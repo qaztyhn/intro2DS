@@ -28,7 +28,8 @@ Baseline chỉ chạy "từ đầu đến cuối" thật sự khi extract, refer
 
 `paper_key` = ID với `.` thành `-` và `/` thành `__` (vd `2507-01659`). ID gốc luôn nằm trong dữ liệu.
 Trạng thái dùng bộ giá trị trong `src/common.py`: pending, running, ok, empty, failed, skipped.
-Mã lỗi cũng ở đó (TIMEOUT, HTTP_429, NOT_FOUND, CORRUPT_SOURCE, UNSUPPORTED_FORMAT...).
+Mã lỗi nằm trong `src/utils/errors.py` (TIMEOUT, HTTP_429, NOT_FOUND, CORRUPT_SOURCE, UNSUPPORTED_FORMAT...) và mọi
+module dùng chung một lớp lỗi `CrawlError(message, error_code, status_code=None)`; `http_status` là bí danh của `status_code`.
 Giá trị chưa biết dùng `null`, không dùng 0.
 
 Một dòng `events.jsonl`:
@@ -62,19 +63,18 @@ Quy tắc chung:
 - Nên xóa `tmp/.../source.archive` sau khi extract xong để giảm đĩa. Phải ghi `archive_bytes` trước khi xóa (hiện đã ghi sẵn).
 - Trong tập thử 20 bài có 1 phiên bản `pdf`, dùng nó để kiểm tra trường hợp rỗng.
 
-### Châu: `src/references.py`, `src/request_utils.py`
-Đọc: `src/request_utils.py` (hàm `RequestClient.get`), `src/common.py`, mục 3.
+### Châu: `src/references.py`, `src/utils/http.py`
+Đọc: `src/utils/http.py` (`request_with_retry`, `request_json`, `request_text`, `download_file`), `src/utils/errors.py`, mục 3.
 - Gọi Semantic Scholar theo ID bài (không theo phiên bản), lưu **mọi** reference kể cả không có arXiv ID,
   kèm `status`, `fetched_at`, nguồn. Gợi ý: `papers/<key>/references.json`.
 - Phân biệt: phản hồi rỗng hợp lệ (`empty`, lý do NO_REFERENCES_RETURNED), NOT_FOUND, lỗi mạng, INVALID_RESPONSE.
 - Giới hạn Semantic Scholar riêng (1 request/giây), không dùng chung throttle của arXiv.
-- **Còn nợ trong `request_utils.py`:**
-  1. Thêm hook mỗi lần thử, gọi với `attempt, http_status, error_code, duration, error_message`
-     (duration chỉ tính attempt đó, đơn vị giây, không gồm thời gian chờ retry). Tạo hook một lần trước vòng
-     retry, gọi ngoài khối bắt lỗi HTTP để lỗi hook không bị hiểu thành lỗi mạng.
-  2. `backoff_base_seconds = 2` làm retry đầu tiên tới arXiv chờ 2 giây, thấp hơn quy tắc 3 giây. Cần tăng
-     hoặc đảm bảo tối thiểu 3 giây với arXiv.
-  Giữ nguyên chữ ký `get(url, stream=False)` và mã lỗi để không làm gãy discovery/download.
+- Lớp HTTP chung duy nhất là `src/utils/http.py`: timeout, retry, backoff, throttle trước **mọi** lần thử, hook từng lần
+  thử (tham số từ khóa). Lỗi dùng chung `CrawlError` (`src/utils/errors.py`). Không gọi `requests` trực tiếp ở module khác.
+- Discovery và download lấy cấu hình HTTP từ `http_options(cfg, throttle, on_attempt=None)` trong `src/config.py`
+  (dict tham số cho `request_text` và `download_file`). Cắm hook từng lần thử qua `on_attempt=`.
+- Việc còn lại của Châu: hàm `references_paper(cfg, arxiv_id, events)` bọc `crawl_references`, ghi
+  `papers/<key>/references.json`, và truyền hook từng lần thử khi gọi `request_json`.
 
 ### Hiền: `src/metrics.py`, `configs/benchmark.json`, notebook Colab
 Đọc: `src/main.py` (hàm `start_metrics`, `process_paper`), `src/common.py` (`EventLog`, `Stopwatch`), `run.json` mẫu.
@@ -134,7 +134,9 @@ chưa tính references. Cần đặt `run_id` cố định và lưu `experiments
 ## 6. Chưa làm / lưu ý
 
 - `extract`, `references`, `storage`, `metrics` chưa có hàm, đang `skipped`. Chưa chạy đầy đủ end-to-end.
-- `request_utils.py` chưa có hook từng lần thử và backoff còn dưới 3 giây (việc của Châu, mục 4).
+- `main.py` còn dùng `EventLog` riêng trong `common.py`. Cần chuyển sang `EventLogger` và `measure_stage` của Hiền,
+  và tách pha discovery (cả tập ID) khỏi vòng lặp theo bài để khớp `docs/metrics-integration.md`.
 - `tests/` trống, `src/requirements.txt` chưa có psutil/pytest và chưa ghim phiên bản.
 - Discovery chỉ ghi phiên bản tại thời điểm tra. Phiên bản mới xuất hiện sau đó chỉ được thấy khi chạy run mới.
 - Không commit thư mục `experiments/`, `configs/test*`, `.venv`.
+- Trường `attempts` trong `events.jsonl` đang là `null` (`CrawlError` không đếm số lần thử). Số lần thử sẽ được ghi từng lần qua hook của Hiền khi nối metrics.
