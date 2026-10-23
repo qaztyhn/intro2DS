@@ -242,7 +242,7 @@ def discover_paper(
         status = FAILED
         events.log(
             STAGE, FAILED, arxiv_id=arxiv_id, error_code=error.error_code,
-            http_status=error.http_status,
+            http_status=error.status_code,
             message=str(error)[:300], elapsed_seconds=watch.elapsed,
         )
     else:
@@ -250,7 +250,7 @@ def discover_paper(
         if warning:
             events.log(
                 STAGE, OK, arxiv_id=arxiv_id, error_code=warning.error_code,
-                http_status=warning.http_status,
+                http_status=warning.status_code,
                 message=f"revised_dates unavailable: {str(warning)[:250]}",
                 elapsed_seconds=watch.elapsed,
             )

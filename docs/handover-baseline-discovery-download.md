@@ -29,7 +29,7 @@ Baseline chỉ chạy "từ đầu đến cuối" thật sự khi extract, refer
 `paper_key` = ID với `.` thành `-` và `/` thành `__` (vd `2507-01659`). ID gốc luôn nằm trong dữ liệu.
 Trạng thái dùng bộ giá trị trong `src/common.py`: pending, running, ok, empty, failed, skipped.
 Mã lỗi nằm trong `src/utils/errors.py` (TIMEOUT, HTTP_429, NOT_FOUND, CORRUPT_SOURCE, UNSUPPORTED_FORMAT...) và mọi
-module dùng chung một lớp lỗi `CrawlError(message, error_code, status_code=None)`; `http_status` là bí danh của `status_code`.
+module dùng chung một lớp lỗi `CrawlError(message, error_code, status_code=None)`; trong `events.jsonl`, giá trị này được ghi ở cột `http_status`.
 Giá trị chưa biết dùng `null`, không dùng 0.
 
 Một dòng `events.jsonl`:
