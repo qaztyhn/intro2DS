@@ -40,14 +40,14 @@ Một dòng `events.jsonl`:
 
 | File | Chủ | Hàm | Gọi như |
 |---|---|---|---|
-| `src/extract.py` | Linh | `extract_paper` | `extract_paper(cfg, arxiv_id, events)` |
-| `src/references.py` | Châu | `references_paper` | `references_paper(cfg, arxiv_id, events)` |
-| `src/storage.py` | Linh | `store_paper` | `store_paper(cfg, arxiv_id, events)` |
+| `src/extract.py` | Linh | `extract_paper` | `extract_paper(cfg, arxiv_id, logger)` |
+| `src/references.py` | Châu | `references_paper` | `references_paper(cfg, arxiv_id, logger)` |
+| `src/storage.py` | Linh | `store_paper` | `store_paper(cfg, arxiv_id, logger)` |
 | `src/metrics.py` | Hiền | `start_sampler` | `start_sampler(cfg, run_dir)` trả về object có `.stop()` |
 
 Quy tắc chung:
 - Idempotent: chạy lại không tạo bản ghi trùng, không ghi đè kết quả tốt bằng kết quả lỗi.
-- Ghi log bằng `events.log(stage, status, arxiv_id=..., version=..., error_code=..., elapsed_seconds=...)`.
+- Ghi log bằng `logger.log(stage, status, arxiv_id=..., version=..., error_code=..., elapsed_seconds=...)`.
 - Lỗi bất ngờ cứ ném ra: `process_paper` bắt, ghi sự kiện `failed` rồi đi tiếp.
 - Đọc `cfg["output_root"] / cfg["run_id"]` để biết thư mục run. Ghi file bằng `write_json_atomic` trong `common.py`.
 - Hàm chưa có thì pipeline ghi `skipped`, không báo lỗi.
@@ -73,11 +73,11 @@ Quy tắc chung:
   thử (tham số từ khóa). Lỗi dùng chung `CrawlError` (`src/utils/errors.py`). Không gọi `requests` trực tiếp ở module khác.
 - Discovery và download lấy cấu hình HTTP từ `http_options(cfg, throttle, on_attempt=None)` trong `src/config.py`
   (dict tham số cho `request_text` và `download_file`). Cắm hook từng lần thử qua `on_attempt=`.
-- Việc còn lại của Châu: hàm `references_paper(cfg, arxiv_id, events)` bọc `crawl_references`, ghi
+- Việc còn lại của Châu: hàm `references_paper(cfg, arxiv_id, logger)` bọc `crawl_references`, ghi
   `papers/<key>/references.json`, và truyền hook từng lần thử khi gọi `request_json`.
 
 ### Hiền: `src/metrics.py`, `configs/benchmark.json`, notebook Colab
-Đọc: `src/main.py` (hàm `start_metrics`, `process_paper`), `src/common.py` (`EventLog`, `Stopwatch`), `run.json` mẫu.
+Đọc: `src/main.py` (hàm `start_metrics`, `process_paper`), `src/common.py` (`EventLogger`, `Stopwatch`), `run.json` mẫu.
 - `start_sampler(cfg, run_dir)`: lấy mẫu RAM của tiến trình gốc và tiến trình con (psutil), đĩa của `run_dir`
   (gồm `tmp/`), trả về object có `.stop()`. Ghi mẫu ra file riêng trong `run_dir`.
 - Số liệu lấy từ `events.jsonl`:
@@ -114,8 +114,8 @@ Kiểm tra hook của bạn mà không sửa file của ai (ví dụ cho Châu, 
     python - <<'EOF'
     import sys
     import src.references as rf
-    def fake(cfg, arxiv_id, events):
-        events.log("references", "ok", arxiv_id=arxiv_id, message="fake")
+    def fake(cfg, arxiv_id, logger):
+        logger.log("references", "ok", arxiv_id=arxiv_id, message="fake")
     rf.references_paper = fake
     sys.argv = ["main", "configs/test_small.yaml"]
     from src.main import main
@@ -134,7 +134,7 @@ chưa tính references. Cần đặt `run_id` cố định và lưu `experiments
 ## 6. Chưa làm / lưu ý
 
 - `extract`, `references`, `storage`, `metrics` chưa có hàm, đang `skipped`. Chưa chạy đầy đủ end-to-end.
-- `main.py` còn dùng `EventLog` riêng trong `common.py`. Cần chuyển sang `EventLogger` và `measure_stage` của Hiền,
+- `main.py` còn dùng `EventLogger` riêng trong `common.py`. Cần chuyển sang `EventLogger` và `measure_stage` của Hiền,
   và tách pha discovery (cả tập ID) khỏi vòng lặp theo bài để khớp `docs/metrics-integration.md`.
 - `tests/` trống, `src/requirements.txt` chưa có psutil/pytest và chưa ghim phiên bản.
 - Discovery chỉ ghi phiên bản tại thời điểm tra. Phiên bản mới xuất hiện sau đó chỉ được thấy khi chạy run mới.
