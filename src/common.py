@@ -10,6 +10,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from .utils.http import Throttle as _BaseThrottle
 
 # --- status vocabulary -------------------------------------------------------
 PENDING = "pending"
@@ -148,21 +149,17 @@ class Stopwatch:
         return time.monotonic() - self._start
 
 
-class Throttle:
-    """Keeps at least ``delay`` seconds between two requests to arXiv.
-    Call ``wait()`` before a request; call ``mark()`` after requests made elsewhere
-    (e.g. by the arxiv package) so the next ``wait()`` accounts for them."""
+class Throttle(_BaseThrottle):
+    """The shared throttle of utils/http.py plus ``mark()``.
 
-    def __init__(self, delay: float):
-        self.delay = delay
-        self._last: Optional[float] = None
+    ``wait()`` is called by utils/http.py before every request attempt. ``mark()``
+    records requests made elsewhere (e.g. by the arxiv package) so the next
+    ``wait()`` accounts for them.
+    """
 
-    def wait(self) -> None:
-        if self._last is not None:
-            remaining = self.delay - (time.monotonic() - self._last)
-            if remaining > 0:
-                time.sleep(remaining)
-        self._last = time.monotonic()
+    @property
+    def delay(self) -> float:
+        return self.min_interval
 
     def mark(self) -> None:
         self._last = time.monotonic()

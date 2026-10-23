@@ -1,26 +1,16 @@
-"""Shared request utility: timeout, retry and exponential backoff live here only.
+"""Adapter between the baseline modules and the shared HTTP layer in utils/http.py.
 
-Other modules call ``RequestClient.get`` and catch ``PipelineError``; they never
-touch ``requests`` directly, so this file can be replaced (e.g. by Chau's version)
-as long as the ``get`` interface and the error codes stay the same.
+Timeout, retry, backoff, throttling and the per-attempt hook live in utils/http.py
+(Chau) only. This file turns its CrawlError into the baseline's PipelineError, so
+discovery and download keep a single error type, and counts attempts for the events log.
 """
 
-import time
-from typing import Optional
+import pathlib
+from typing import Callable, Optional
 
-import requests
-
-from .common import (
-    HTTP_429,
-    HTTP_5XX,
-    INVALID_RESPONSE,
-    NETWORK_ERROR,
-    NOT_FOUND,
-    TIMEOUT,
-    PipelineError,
-)
-
-MAX_BACKOFF_SECONDS = 60.0
+from .common import PipelineError, Throttle
+from .utils.errors import CrawlError
+from .utils.http import download_file, request_text
 
 
 class RequestClient:
@@ -29,57 +19,45 @@ class RequestClient:
         user_agent: str,
         timeout: float,
         max_retries: int,
+        throttle: Throttle,
         backoff_base_seconds: float = 2.0,
+        on_attempt: Optional[Callable[..., None]] = None,
     ):
+        self.headers = {"User-Agent": user_agent}
         self.timeout = timeout
         self.max_retries = max_retries
+        self.throttle = throttle
         self.backoff_base_seconds = backoff_base_seconds
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": user_agent})
+        self.on_attempt = on_attempt  # keyword hook: attempt, http_status, error_code, error_message, duration
 
-    def _sleep_before_retry(self, attempt: int, retry_after: Optional[str]) -> None:
-        delay = self.backoff_base_seconds * (2 ** (attempt - 1))
-        if retry_after and retry_after.isdigit():
-            delay = max(delay, float(retry_after))
-        time.sleep(min(delay, MAX_BACKOFF_SECONDS))
+    def _run(self, func, *args):
+        attempts = 0
 
-    def get(self, url: str, stream: bool = False) -> requests.Response:
-        """GET ``url``. Returns a 200 response or raises ``PipelineError``.
+        def hook(**info):
+            nonlocal attempts
+            attempts = info.get("attempt", attempts)
+            if self.on_attempt is not None:
+                self.on_attempt(**info)
 
-        Retried (up to ``max_retries`` extra attempts): timeout, network error,
-        HTTP 429 (honours Retry-After), HTTP 5xx.
-        Not retried: 404 (NOT_FOUND) and any other 4xx (INVALID_RESPONSE).
-        """
-        total_attempts = self.max_retries + 1
-        error: Optional[PipelineError] = None
+        try:
+            return func(
+                *args,
+                headers=self.headers,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+                base_delay=self.backoff_base_seconds,
+                throttle=self.throttle,
+                on_attempt=hook,
+            )
+        except CrawlError as exc:
+            raise PipelineError(
+                exc.error_code, str(exc), http_status=exc.status_code, attempts=attempts or None
+            ) from exc
 
-        for attempt in range(1, total_attempts + 1):
-            retry_after = None
-            try:
-                response = self.session.get(url, timeout=self.timeout, stream=stream)
-            except requests.Timeout as exc:
-                error = PipelineError(TIMEOUT, str(exc), attempts=attempt)
-            except requests.RequestException as exc:
-                error = PipelineError(NETWORK_ERROR, str(exc), attempts=attempt)
-            else:
-                status = response.status_code
-                if status == 200:
-                    return response
-                retry_after = response.headers.get("Retry-After")
-                response.close()
-                if status == 404:
-                    raise PipelineError(NOT_FOUND, f"404 for {url}", http_status=status, attempts=attempt)
-                if status == 429:
-                    error = PipelineError(HTTP_429, f"429 for {url}", http_status=status, attempts=attempt)
-                elif 500 <= status < 600:
-                    error = PipelineError(HTTP_5XX, f"{status} for {url}", http_status=status, attempts=attempt)
-                else:
-                    raise PipelineError(
-                        INVALID_RESPONSE, f"unexpected HTTP {status} for {url}", http_status=status, attempts=attempt
-                    )
+    def get_text(self, url: str) -> str:
+        """GET ``url`` and return its text, or raise PipelineError."""
+        return self._run(request_text, url)
 
-            if attempt < total_attempts:
-                self._sleep_before_retry(attempt, retry_after)
-
-        assert error is not None
-        raise error
+    def download(self, url: str, destination: pathlib.Path) -> pathlib.Path:
+        """Stream ``url`` into ``destination`` atomically, or raise PipelineError."""
+        return self._run(download_file, url, destination)
