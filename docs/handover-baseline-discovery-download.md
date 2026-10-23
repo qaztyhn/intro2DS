@@ -1,8 +1,7 @@
 # Handover: Baseline B (Hương) -> Linh, Châu, Hiền
 
 Trạng thái: **discovery + download + điều phối đã chạy được và đã kiểm tra**.
-Baseline chỉ chạy "từ đầu đến cuối" thật sự khi extract, references, storage, metrics có hàm theo
-đúng hợp đồng bên dưới. Hiện các file đó rỗng và được ghi `skipped`.
+Baseline chạy từ đầu đến cuối khi extract và storage có hàm theo hợp đồng bên dưới. Hiện extract.py, storage.pycòn rỗng và được ghiskipped; references và metrics đã được nối trực tiếp trong main.py.
 
 ## 1. Pipeline hoạt động thế nào
 
@@ -22,6 +21,7 @@ Baseline chỉ chạy "từ đầu đến cuối" thật sự khi extract, refer
 
     run.json
     events.jsonl
+    metrics_events.jsonl
     papers/<paper_key>/metadata.json                 # discovery: title, authors, dates, versions, status
     papers/<paper_key>/versions/v<N>/manifest.json   # từng phiên bản (schema 1.B trong docx)
     tmp/<paper_key>/v<N>/source.archive              # gói tải về, tạm thời
@@ -41,9 +41,9 @@ Một dòng `events.jsonl`:
 | File | Chủ | Hàm | Gọi như |
 |---|---|---|---|
 | `src/extract.py` | Linh | `extract_paper` | `extract_paper(cfg, arxiv_id, logger)` |
-| `src/references.py` | Châu | `references_paper` | `references_paper(cfg, arxiv_id, logger)` |
+| `src/references.py` | Châu | `crawl_references` | gọi từ `make_references_hook` trong `main.py`, ghi `papers/<key>/references.json` |
 | `src/storage.py` | Linh | `store_paper` | `store_paper(cfg, arxiv_id, logger)` |
-| `src/metrics.py` | Hiền | `start_sampler` | `start_sampler(cfg, run_dir)` trả về object có `.stop()` |
+| `src/metrics.py` | Hiền | `ResourceMonitor`, `EventLogger`, `make_request_hook`, `measure_stage`, `log_resource_results` | dùng trực tiếp trong `main.py`, log ghi vào `metrics_events.jsonl` |
 
 Quy tắc chung:
 - Idempotent: chạy lại không tạo bản ghi trùng, không ghi đè kết quả tốt bằng kết quả lỗi.
@@ -73,13 +73,11 @@ Quy tắc chung:
   thử (tham số từ khóa). Lỗi dùng chung `CrawlError` (`src/utils/errors.py`). Không gọi `requests` trực tiếp ở module khác.
 - Discovery và download lấy cấu hình HTTP từ `http_options(cfg, throttle, on_attempt=None)` trong `src/config.py`
   (dict tham số cho `request_text` và `download_file`). Cắm hook từng lần thử qua `on_attempt=`.
-- Việc còn lại của Châu: hàm `references_paper(cfg, arxiv_id, logger)` bọc `crawl_references`, ghi
-  `papers/<key>/references.json`, và truyền hook từng lần thử khi gọi `request_json`.
+- Đã nối: make_references_hooktrongmain.pybọccrawl_references, ghi papers/<key>/references.json, bỏ qua bài đã ok/empty, truyền hook từng lần thử vào request_json.
 
 ### Hiền: `src/metrics.py`, `configs/benchmark.json`, notebook Colab
 Đọc: `src/main.py` (hàm `start_metrics`, `process_paper`), `src/common.py` (`EventLogger`, `Stopwatch`), `run.json` mẫu.
-- `start_sampler(cfg, run_dir)`: lấy mẫu RAM của tiến trình gốc và tiến trình con (psutil), đĩa của `run_dir`
-  (gồm `tmp/`), trả về object có `.stop()`. Ghi mẫu ra file riêng trong `run_dir`.
+- Đã nối: main()bọc vòng lặp bằngmetrics.ResourceMonitor(run_dir)(RAM của tiến trình và tiến trình con, đĩa củarun_dirgồmtmp/), rồi ghi mẫu và tổng kết bằng log_resource_resultsvàometrics_events.jsonl.
 - Số liệu lấy từ `events.jsonl`:
   - Thời gian từng bài: sự kiện `stage == "paper"` (`elapsed_seconds`, gồm discovery + download + các hook).
   - Tổng thời gian discovery: cộng `elapsed_seconds` của sự kiện `discovery` (không còn `discovery_total`).
@@ -113,9 +111,9 @@ Kiểm tra hook của bạn mà không sửa file của ai (ví dụ cho Châu, 
 
     python - <<'EOF'
     import sys
-    import src.references as rf
+    import src.extract as rf, rf.extract_paper = fake
     def fake(cfg, arxiv_id, logger):
-        logger.log("references", "ok", arxiv_id=arxiv_id, message="fake")
+        logger.log("extract", "ok", arxiv_id=arxiv_id, message="fake")
     rf.references_paper = fake
     sys.argv = ["main", "configs/test_small.yaml"]
     from src.main import main
@@ -133,10 +131,10 @@ chưa tính references. Cần đặt `run_id` cố định và lưu `experiments
 
 ## 6. Chưa làm / lưu ý
 
-- `extract`, `references`, `storage`, `metrics` chưa có hàm, đang `skipped`. Chưa chạy đầy đủ end-to-end.
-- `main.py` còn dùng `EventLogger` riêng trong `common.py`. Cần chuyển sang `EventLogger` và `measure_stage` của Hiền,
-  và tách pha discovery (cả tập ID) khỏi vòng lặp theo bài để khớp `docs/metrics-integration.md`.
-- `tests/` trống, `src/requirements.txt` chưa có psutil/pytest và chưa ghim phiên bản.
-- Discovery chỉ ghi phiên bản tại thời điểm tra. Phiên bản mới xuất hiện sau đó chỉ được thấy khi chạy run mới.
-- Không commit thư mục `experiments/`, `configs/test*`, `.venv`.
-- Trường `attempts` trong `events.jsonl` đang là `null` (`CrawlError` không đếm số lần thử). Số lần thử sẽ được ghi từng lần qua hook của Hiền khi nối metrics.
+  - `extract`, `storage` chưa có hàm, đang `skipped`. references và metrics đã nối trong `main.py`. Chưa chạy đầy đủ end-to-end.
+  - `main.py` ghi `events.jsonl` bằng `EventLogger` của `common.py` (đã đổi tên từ `EventLog`, tham số `events` thành `logger`).
+    Hiền có `EventLogger` riêng trong `metrics.py` ghi `metrics_events.jsonl` với schema khác (`timestamp`, `event`), nên
+    `metrics.read_events` chưa đọc được `events.jsonl`. Cần chuyển sang `measure_stage`, và tách pha discovery (cả tập ID)
+    khỏi vòng lặp theo bài để khớp `docs/metrics-integration.md`.
+  - Trường `attempts` trong `events.jsonl` vẫn là `null` (`CrawlError` không đếm số lần thử). Từng lần thử được ghi trong
+    `metrics_events.jsonl` (sự kiện `request_attempt_finished`).
