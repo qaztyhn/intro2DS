@@ -14,23 +14,20 @@ import pathlib
 from typing import Any, Dict, Optional
 
 from ..common import (
-    CORRUPT_SOURCE,
     FAILED,
-    INVALID_RESPONSE,
     OK,
     PENDING,
     SKIPPED,
     EventLog,
-    PipelineError,
     Stopwatch,
-    Throttle,
     load_ids,
     paper_key,
     read_json,
     write_json_atomic,
 )
-from ..config import load_config
-from ..request_utils import RequestClient
+from ..config import http_options, load_config
+from ..utils.errors import CORRUPT_SOURCE, INVALID_RESPONSE, CrawlError
+from ..utils.http import Throttle, download_file
 
 STAGE = "download"
 SRC_URL = "https://export.arxiv.org/src/{versioned_id}"
@@ -45,7 +42,7 @@ def detect_format(path: pathlib.Path) -> str:
             with gzip.open(path, "rb") as gz:
                 inner = gz.read(512)
         except (OSError, EOFError) as exc:
-            raise PipelineError(CORRUPT_SOURCE, f"unreadable gzip: {exc}") from exc
+            raise CrawlError(f"unreadable gzip: {exc}", CORRUPT_SOURCE) from exc
         return "tar.gz" if inner[257:262] == b"ustar" else "gz"
     if head[257:262] == b"ustar":
         return "tar"
@@ -72,20 +69,20 @@ def make_manifest(arxiv_id: str, version: int) -> Dict[str, Any]:
     }
 
 
-def _download_archive(client: RequestClient, url: str, target: pathlib.Path) -> int:
+def _download_archive(opts: Dict[str, Any], url: str, target: pathlib.Path) -> int:
     """Download ``url`` into ``target`` through the shared HTTP layer; return its size in bytes.
 
     Retry, backoff and throttling are done by utils/http.py (a cut-short stream is retried there).
     """
-    client.download(url, target)
+    download_file(url, target, **opts)
     size = target.stat().st_size
     if size == 0:
         target.unlink(missing_ok=True)
-        raise PipelineError(INVALID_RESPONSE, "empty response body")
+        raise CrawlError("empty response body", INVALID_RESPONSE)
     return size
 
 def download_version(
-    cfg: Dict[str, Any], client: RequestClient, arxiv_id: str, version: int
+    cfg: Dict[str, Any], opts: Dict[str, Any], arxiv_id: str, version: int
 ) -> Dict[str, Any]:
     """Download one version and return its manifest (also written to disk)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -95,12 +92,12 @@ def download_version(
     archive = run_dir / "tmp" / key / f"v{version}" / "source.archive"
 
     try:
-        size = _download_archive(client, SRC_URL.format(versioned_id=manifest["versioned_id"]), archive)
+        size = _download_archive(opts, SRC_URL.format(versioned_id=manifest["versioned_id"]), archive)
         manifest["source_format"] = detect_format(archive)
         manifest["archive_bytes"] = size
         manifest["archive_path"] = archive.relative_to(run_dir).as_posix()
         manifest["download_status"] = OK
-    except PipelineError as error:
+    except CrawlError as error:
         manifest["error_code"] = error.error_code
         manifest["download_status"] = FAILED
         write_json_atomic(manifest_path, manifest)
@@ -110,7 +107,7 @@ def download_version(
 
 
 def download_paper(
-    cfg: Dict[str, Any], arxiv_id: str, client: RequestClient, events: EventLog
+    cfg: Dict[str, Any], arxiv_id: str, opts: Dict[str, Any], events: EventLog
 ) -> Dict[str, int]:
     """Download every version of one paper. Returns counts per status (one per version)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -133,17 +130,17 @@ def download_paper(
 
         watch = Stopwatch()
         try:
-            manifest = download_version(cfg, client, arxiv_id, version)
+            manifest = download_version(cfg, opts, arxiv_id, version)
         except Exception as exc:  # noqa: BLE001 - one version must never stop the run
-            error = exc if isinstance(exc, PipelineError) else PipelineError(INVALID_RESPONSE, repr(exc))
-            if not isinstance(exc, PipelineError):  # unexpected bug: still leave a manifest behind
+            error = exc if isinstance(exc, CrawlError) else CrawlError(repr(exc), INVALID_RESPONSE)
+            if not isinstance(exc, CrawlError):  # unexpected bug: still leave a manifest behind
                 failed = make_manifest(arxiv_id, version)
                 failed["error_code"] = error.error_code
                 write_json_atomic(manifest_path, failed)
             counts[FAILED] += 1
             events.log(
                 STAGE, FAILED, arxiv_id=arxiv_id, version=version, error_code=error.error_code,
-                http_status=error.http_status, attempts=error.attempts,
+                http_status=error.http_status,
                 message=str(error)[:300], elapsed_seconds=watch.elapsed,
             )
         else:
@@ -161,11 +158,11 @@ def run_download(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict
     if events is None:
         events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
     throttle = Throttle(cfg["arxiv_delay_seconds"])
-    client = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"], throttle=throttle)
+    opts = http_options(cfg, throttle)
 
     totals = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        for status, n in download_paper(cfg, arxiv_id, client, events).items():
+        for status, n in download_paper(cfg, arxiv_id, opts, events).items():
             totals[status] += n
     return totals
 

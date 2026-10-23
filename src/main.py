@@ -95,15 +95,15 @@ def load_paper_hooks(events):
             hooks.append((stage, func))
     return hooks
 
-def process_paper(cfg, arxiv_id, client, http, throttle, hooks, events) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, events) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
-    d_status = discover_paper(cfg, arxiv_id, client, http, throttle, events)
+    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, events)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, http, events)
+        counts = download_paper(cfg, arxiv_id, opts, events)
         for stage, func in hooks:
             stage_watch = Stopwatch()
             try:
@@ -145,11 +145,11 @@ def main() -> None:
     try:
         sampler = start_metrics(cfg, run_dir, events)
         hooks = load_paper_hooks(events)
-        client, http, throttle = make_clients(cfg)  # one Throttle shared by discovery and download
+        client, opts, throttle = make_clients(cfg)  # one Throttle shared by discovery and download
         ids = record["input_ids"]
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
         for index, arxiv_id in enumerate(ids, start=1):
-            paper_status = process_paper(cfg, arxiv_id, client, http, throttle, hooks, events)
+            paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, events)
             counts[paper_status] += 1
             print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
         print("papers:", counts)

@@ -65,3 +65,15 @@ def load_config(path: Optional[pathlib.Path] = None) -> Dict[str, Any]:
     cfg["ids_file"] = (base / cfg["ids_file"]).resolve()
     cfg["output_root"] = (base / cfg["output_root"]).resolve()
     return cfg
+
+
+def http_options(cfg: Dict[str, Any], throttle, on_attempt=None) -> Dict[str, Any]:
+    """Keyword arguments for utils.http.request_text / download_file, taken from the config."""
+    return {
+        "headers": {"User-Agent": cfg["user_agent"]},
+        "timeout": cfg["timeout"],
+        "max_retries": cfg["max_retries"],
+        "base_delay": cfg.get("backoff_base_seconds", 2.0),
+        "throttle": throttle,
+        "on_attempt": on_attempt,
+    }

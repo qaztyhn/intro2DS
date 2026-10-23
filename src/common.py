@@ -1,6 +1,6 @@
 """Helpers shared by the baseline modules (discovery, download).
 
-Status / error vocabulary follows section 4 of Intro2DS_Project.md.
+Status vocabulary follows section 4 of Intro2DS_Project.md; error codes live in utils/errors.py.
 """
 
 import json
@@ -10,7 +10,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from .utils.http import Throttle as _BaseThrottle
+from .utils.errors import INVALID_RESPONSE, CrawlError
 
 # --- status vocabulary -------------------------------------------------------
 PENDING = "pending"
@@ -19,32 +19,6 @@ OK = "ok"
 EMPTY = "empty"
 FAILED = "failed"
 SKIPPED = "skipped"
-
-# --- error codes -------------------------------------------------------------
-TIMEOUT = "TIMEOUT"
-NETWORK_ERROR = "NETWORK_ERROR"
-HTTP_429 = "HTTP_429"
-HTTP_5XX = "HTTP_5XX"
-NOT_FOUND = "NOT_FOUND"
-INVALID_RESPONSE = "INVALID_RESPONSE"
-CORRUPT_SOURCE = "CORRUPT_SOURCE"
-UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
-
-
-class PipelineError(Exception):
-    """A failure that has already been classified with one of the error codes."""
-
-    def __init__(
-        self,
-        error_code: str,
-        message: str = "",
-        http_status: Optional[int] = None,
-        attempts: Optional[int] = None,
-    ):
-        super().__init__(message or error_code)
-        self.error_code = error_code
-        self.http_status = http_status
-        self.attempts = attempts
 
 
 def utc_now_iso() -> str:
@@ -64,7 +38,7 @@ def split_versioned_id(short_id: str):
     """'2310.12345v3' -> ('2310.12345', 3); 'hep-th/9901001v1' -> ('hep-th/9901001', 1)."""
     match = _VERSION_SUFFIX.search(short_id)
     if not match:
-        raise PipelineError(INVALID_RESPONSE, f"no version suffix in id {short_id!r}")
+        raise CrawlError(f"no version suffix in id {short_id!r}", INVALID_RESPONSE)
     return short_id[: match.start()], int(match.group(1))
 
 
@@ -147,19 +121,3 @@ class Stopwatch:
     @property
     def elapsed(self) -> float:
         return time.monotonic() - self._start
-
-
-class Throttle(_BaseThrottle):
-    """The shared throttle of utils/http.py plus ``mark()``.
-
-    ``wait()`` is called by utils/http.py before every request attempt. ``mark()``
-    records requests made elsewhere (e.g. by the arxiv package) so the next
-    ``wait()`` accounts for them.
-    """
-
-    @property
-    def delay(self) -> float:
-        return self.min_interval
-
-    def mark(self) -> None:
-        self._last = time.monotonic()
