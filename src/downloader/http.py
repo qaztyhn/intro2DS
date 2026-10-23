@@ -140,7 +140,7 @@ def download_paper(
             counts[FAILED] += 1
             events.log(
                 STAGE, FAILED, arxiv_id=arxiv_id, version=version, error_code=error.error_code,
-                http_status=error.http_status,
+                http_status=error.status_code,
                 message=str(error)[:300], elapsed_seconds=watch.elapsed,
             )
         else:

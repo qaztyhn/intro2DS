@@ -1,14 +1,12 @@
 from src.utils.errors import HTTP_4XX, NOT_FOUND, TIMEOUT, ClientError, CrawlError
 from src.utils.http import Throttle
 
-
-def test_http_status_is_an_alias_of_status_code():
-    error = CrawlError("boom", TIMEOUT, 503)
-    assert error.status_code == error.http_status == 503
+def test_status_code_is_stored():
+    assert CrawlError("boom", TIMEOUT, 503).status_code == 503
 
 
-def test_http_status_is_none_without_a_status():
-    assert CrawlError("boom", TIMEOUT).http_status is None
+def test_status_code_is_none_without_a_status():
+    assert CrawlError("boom", TIMEOUT).status_code is None
 
 
 def test_client_error_codes():
