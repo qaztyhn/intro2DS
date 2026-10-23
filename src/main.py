@@ -19,10 +19,11 @@ import platform
 import sys
 from importlib import metadata
 
-from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, read_json, utc_now_iso, write_json_atomic
-from .config import load_config
+from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
+from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .downloader.http import download_paper
+from .references import crawl_references
 from . import metrics
 
 # One hook per paper, each defined by the module's owner:  func(cfg, arxiv_id, logger)
@@ -73,10 +74,39 @@ def finish_run(run_dir, record, status, wall):
     record["wall_seconds"] = round(wall.elapsed, 3)
     write_json_atomic(run_dir / "run.json", record)
 
-def load_paper_hooks(logger):
+def make_references_hook(metrics_logger):
+    """Build the references stage hook: func(cfg, arxiv_id, logger)."""
+
+    def references_paper(cfg, arxiv_id, logger):
+        run_dir = cfg["output_root"] / cfg["run_id"]
+        path = run_dir / "papers" / paper_key(arxiv_id) / "references.json"
+        existing = read_json(path)
+        if existing and existing.get("status") in (OK, "empty"):
+            logger.log("references", SKIPPED, arxiv_id=arxiv_id, message="already fetched")
+            return
+
+        watch = Stopwatch()
+        on_attempt = metrics.make_request_hook(metrics_logger, "references", arxiv_id=arxiv_id)
+        opts = http_options(cfg, None, on_attempt=on_attempt)
+        opts.pop("throttle")  # references.py already applies its own Semantic Scholar throttle (S2)
+        with metrics.measure_stage(metrics_logger, "references", arxiv_id=arxiv_id):
+            result = crawl_references(arxiv_id, **opts)
+
+        write_json_atomic(path, result)
+        logger.log(
+            "references", result["status"], arxiv_id=arxiv_id, error_code=result["error_code"],
+            elapsed_seconds=watch.elapsed, message=f"{len(result['references'])} references",
+        )
+
+    return references_paper
+
+def load_paper_hooks(logger, metrics_logger):
     """Return [(stage, func)] for the stage hooks that exist. Missing ones are logged once."""
     hooks = []
     for stage, module_name, func_name in PAPER_STAGES:
+        if stage == "references":
+            hooks.append((stage, make_references_hook(metrics_logger)))
+            continue
         module = importlib.import_module(module_name, package=__package__)
         func = getattr(module, func_name, None)
         if func is None:
@@ -135,7 +165,7 @@ def main() -> None:
     status = "completed"
     monitor = None
     try:
-        hooks = load_paper_hooks(logger)
+        hooks = load_paper_hooks(logger, metrics_logger)
         client, opts, throttle = make_clients(cfg)  # one Throttle shared by discovery and download
         ids = record["input_ids"]
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
