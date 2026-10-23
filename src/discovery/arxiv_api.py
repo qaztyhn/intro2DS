@@ -30,7 +30,7 @@ from ..common import (
     FAILED,
     OK,
     SKIPPED,
-    EventLog,
+    EventLogger,
     Stopwatch,
     load_ids,
     paper_key,
@@ -217,7 +217,7 @@ def discover_paper(
     client: arxiv.Client,
     opts: Dict[str, Any],
     throttle: Throttle,
-    events: EventLog,
+    logger: EventLogger,
 ) -> str:
     """Discover one paper. Returns OK, FAILED or SKIPPED. Never raises for a bad paper."""
     path = paper_dir(cfg, arxiv_id) / "metadata.json"
@@ -228,7 +228,7 @@ def discover_paper(
         and (existing.get("latest_version") == 1 or existing.get("revised_dates") is not None)
     )
     if complete:
-        events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="metadata already ok")
+        logger.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="metadata already ok")
         return SKIPPED
 
     watch = Stopwatch()
@@ -240,7 +240,7 @@ def discover_paper(
         record["status"] = FAILED
         record["error_code"] = error.error_code
         status = FAILED
-        events.log(
+        logger.log(
             STAGE, FAILED, arxiv_id=arxiv_id, error_code=error.error_code,
             http_status=error.status_code,
             message=str(error)[:300], elapsed_seconds=watch.elapsed,
@@ -248,28 +248,28 @@ def discover_paper(
     else:
         status = OK
         if warning:
-            events.log(
+            logger.log(
                 STAGE, OK, arxiv_id=arxiv_id, error_code=warning.error_code,
                 http_status=warning.status_code,
                 message=f"revised_dates unavailable: {str(warning)[:250]}",
                 elapsed_seconds=watch.elapsed,
             )
         else:
-            events.log(STAGE, OK, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed)
+            logger.log(STAGE, OK, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed)
     write_json_atomic(path, record)
     return status
 
 
-def run_discovery(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict[str, int]:
+def run_discovery(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> Dict[str, int]:
     """Discover every id in ``ids_file``. Returns counts per status."""
     run_dir = cfg["output_root"] / cfg["run_id"]
-    if events is None:
-        events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
+    if logger is None:
+        logger = EventLogger(run_dir / "events.jsonl", cfg["run_id"])
     client, opts, throttle = make_clients(cfg)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        counts[discover_paper(cfg, arxiv_id, client, opts, throttle, events)] += 1
+        counts[discover_paper(cfg, arxiv_id, client, opts, throttle, logger)] += 1
     return counts
 
 

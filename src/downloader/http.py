@@ -18,7 +18,7 @@ from ..common import (
     OK,
     PENDING,
     SKIPPED,
-    EventLog,
+    EventLogger,
     Stopwatch,
     load_ids,
     paper_key,
@@ -107,7 +107,7 @@ def download_version(
 
 
 def download_paper(
-    cfg: Dict[str, Any], arxiv_id: str, opts: Dict[str, Any], events: EventLog
+    cfg: Dict[str, Any], arxiv_id: str, opts: Dict[str, Any], logger: EventLogger
 ) -> Dict[str, int]:
     """Download every version of one paper. Returns counts per status (one per version)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -117,7 +117,7 @@ def download_paper(
     metadata = read_json(run_dir / "papers" / key / "metadata.json")
     if not metadata or metadata.get("status") != OK or not metadata.get("versions"):
         counts[SKIPPED] += 1
-        events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="discovery not ok; no version list")
+        logger.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="discovery not ok; no version list")
         return counts
 
     for version in metadata["versions"]:
@@ -125,7 +125,7 @@ def download_paper(
         existing = read_json(manifest_path)
         if existing and existing.get("download_status") == OK:
             counts[SKIPPED] += 1
-            events.log(STAGE, SKIPPED, arxiv_id=arxiv_id, version=version, message="already downloaded")
+            logger.log(STAGE, SKIPPED, arxiv_id=arxiv_id, version=version, message="already downloaded")
             continue
 
         watch = Stopwatch()
@@ -138,31 +138,31 @@ def download_paper(
                 failed["error_code"] = error.error_code
                 write_json_atomic(manifest_path, failed)
             counts[FAILED] += 1
-            events.log(
+            logger.log(
                 STAGE, FAILED, arxiv_id=arxiv_id, version=version, error_code=error.error_code,
                 http_status=error.status_code,
                 message=str(error)[:300], elapsed_seconds=watch.elapsed,
             )
         else:
             counts[OK] += 1
-            events.log(
+            logger.log(
                 STAGE, OK, arxiv_id=arxiv_id, version=version, elapsed_seconds=watch.elapsed,
                 message=f"{manifest['source_format']}, {manifest['archive_bytes']} bytes",
             )
     return counts
 
 
-def run_download(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict[str, int]:
+def run_download(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> Dict[str, int]:
     """Download every version of every paper whose discovery status is ok."""
     run_dir = cfg["output_root"] / cfg["run_id"]
-    if events is None:
-        events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
+    if logger is None:
+        logger = EventLogger(run_dir / "events.jsonl", cfg["run_id"])
     throttle = Throttle(cfg["arxiv_delay_seconds"])
     opts = http_options(cfg, throttle)
 
     totals = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        for status, n in download_paper(cfg, arxiv_id, opts, events).items():
+        for status, n in download_paper(cfg, arxiv_id, opts, logger).items():
             totals[status] += n
     return totals
 
