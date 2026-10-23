@@ -44,6 +44,10 @@ class Throttle:
                 time.sleep(remaining)
         self._last = time.monotonic()
 
+    def mark(self):
+        # Record a request made elsewhere as the latest one.
+        self._last = time.monotonic()
+
 
 ARXIV = Throttle(3.0)
 S2 = Throttle(1.0)  # Adjust the interval to match the caller's API rate limit.

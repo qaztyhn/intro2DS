@@ -28,29 +28,30 @@ import requests
 
 from ..common import (
     FAILED,
-    HTTP_429,
-    HTTP_5XX,
-    INVALID_RESPONSE,
-    NETWORK_ERROR,
-    NOT_FOUND,
     OK,
     SKIPPED,
-    TIMEOUT,
     EventLog,
-    PipelineError,
     Stopwatch,
-    Throttle,
     load_ids,
     paper_key,
     read_json,
     split_versioned_id,
     write_json_atomic,
 )
-from ..config import load_config
-from ..request_utils import RequestClient
+from ..config import http_options, load_config
+from ..utils.errors import (
+    HTTP_429,
+    HTTP_5XX,
+    INVALID_ID,
+    INVALID_RESPONSE,
+    NETWORK_ERROR,
+    NOT_FOUND,
+    TIMEOUT,
+    CrawlError,
+)
+from ..utils.http import Throttle, request_text
 
 STAGE = "discovery"
-INVALID_ID = "INVALID_ID"
 ABS_URL = "https://export.arxiv.org/abs/{arxiv_id}"
 _HAS_VERSION_SUFFIX = re.compile(r"v\d+$")
 _HISTORY_BLOCK = re.compile(r'<div class="submission-history">(.*?)</div>', re.DOTALL)
@@ -83,23 +84,23 @@ def _iso(value) -> Optional[str]:
     return value.isoformat(timespec="seconds") if value else None
 
 
-def _classify_arxiv_error(exc: Exception) -> PipelineError:
+def _classify_arxiv_error(exc: Exception) -> CrawlError:
     """Map exceptions raised by the arxiv package / requests onto our error codes."""
-    if isinstance(exc, PipelineError):
+    if isinstance(exc, CrawlError):
         return exc
     if isinstance(exc, arxiv.HTTPError):
         status = exc.status
         if status == 429:
-            return PipelineError(HTTP_429, str(exc), http_status=status)
+            return CrawlError(str(exc), HTTP_429, status)
         if 500 <= status < 600:
-            return PipelineError(HTTP_5XX, str(exc), http_status=status)
-        return PipelineError(INVALID_RESPONSE, str(exc), http_status=status)
+            return CrawlError(str(exc), HTTP_5XX, status)
+        return CrawlError(str(exc), INVALID_RESPONSE, status)
     if isinstance(exc, requests.Timeout):
-        return PipelineError(TIMEOUT, str(exc))
+        return CrawlError(str(exc), TIMEOUT)
     if isinstance(exc, requests.RequestException):
-        return PipelineError(NETWORK_ERROR, str(exc))
+        return CrawlError(str(exc), NETWORK_ERROR)
     # UnexpectedEmptyPageError, MissingFieldError, other ArxivError, parsing problems
-    return PipelineError(INVALID_RESPONSE, f"{type(exc).__name__}: {exc}")
+    return CrawlError(f"{type(exc).__name__}: {exc}", INVALID_RESPONSE)
 
 
 def _query(client: arxiv.Client, throttle: Throttle, id_list: List[str]) -> List[arxiv.Result]:
@@ -116,13 +117,13 @@ def parse_submission_history(html: str) -> Dict[int, str]:
     """{version: ISO-8601 UTC timestamp} from the abs page's "Submission history"."""
     block = _HISTORY_BLOCK.search(html)
     if not block:
-        raise PipelineError(INVALID_RESPONSE, "no submission-history block on abs page")
+        raise CrawlError("no submission-history block on abs page", INVALID_RESPONSE)
     dates: Dict[int, str] = {}
     for version, text in _HISTORY_ENTRY.findall(block.group(1)):
         parsed = parsedate_to_datetime(f"{text} +0000").astimezone(timezone.utc)
         dates[int(version)] = parsed.isoformat(timespec="seconds")
     if not dates:
-        raise PipelineError(INVALID_RESPONSE, "no versions found in submission history")
+        raise CrawlError("no versions found in submission history", INVALID_RESPONSE)
     return dates
 
 
@@ -138,17 +139,13 @@ def _dates_from_api(
     return dates
 
 
-def _dates_from_abs(http: RequestClient, throttle: Throttle, arxiv_id: str) -> Dict[int, str]:
-    throttle.wait()
-    try:
-        response = http.get(ABS_URL.format(arxiv_id=arxiv_id))
-    finally:
-        throttle.mark()
-    return parse_submission_history(response.text)
+def _dates_from_abs(opts: Dict[str, Any], arxiv_id: str) -> Dict[int, str]:
+    # utils/http.py waits on the shared throttle before every attempt: no manual wait here.
+    return parse_submission_history(request_text(ABS_URL.format(arxiv_id=arxiv_id), **opts))
 
 
 def _revised_dates(
-    client: arxiv.Client, http: RequestClient, throttle: Throttle, arxiv_id: str, latest
+    client: arxiv.Client, opts: Dict[str, Any], throttle: Throttle, arxiv_id: str, latest
 ):
     """Return (revised_dates or None, warning or None)."""
     _, latest_version = split_versioned_id(latest.get_short_id())
@@ -159,15 +156,15 @@ def _revised_dates(
     sources = []
     if "/" not in arxiv_id:  # old-style ids: API cannot serve versioned ids
         sources.append(lambda: _dates_from_api(client, throttle, arxiv_id, latest_version, latest.updated))
-    sources.append(lambda: _dates_from_abs(http, throttle, arxiv_id))
+    sources.append(lambda: _dates_from_abs(opts, arxiv_id))
 
-    warning: Optional[PipelineError] = None
+    warning: Optional[CrawlError] = None
     for fetch in sources:
         try:
             dates = fetch()
             missing = [n for n in needed if not dates.get(n)]
             if missing:
-                raise PipelineError(INVALID_RESPONSE, f"no date for versions {missing}")
+                raise CrawlError(f"no date for versions {missing}", INVALID_RESPONSE)
             return [dates[n] for n in needed], None
         except Exception as exc:  # noqa: BLE001 - try the next source, remember why
             warning = _classify_arxiv_error(exc)
@@ -175,18 +172,18 @@ def _revised_dates(
 
 
 def discover_one(
-    arxiv_id: str, client: arxiv.Client, http: RequestClient, throttle: Throttle, record: Dict[str, Any]
-) -> Optional[PipelineError]:
-    """Fill ``record`` in place. Raises PipelineError if the paper itself cannot be
-    discovered (record stays failed). Returns a warning (PipelineError) when only the
+    arxiv_id: str, client: arxiv.Client, opts: Dict[str, Any], throttle: Throttle, record: Dict[str, Any]
+) -> Optional[CrawlError]:
+    """Fill ``record`` in place. Raises CrawlError if the paper itself cannot be
+    discovered (record stays failed). Returns a warning (CrawlError) when only the
     revised dates are missing; the paper is then still ok.
     """
     if _HAS_VERSION_SUFFIX.search(arxiv_id):
-        raise PipelineError(INVALID_ID, f"{arxiv_id!r}: give the base id without a vN suffix")
+        raise CrawlError(f"{arxiv_id!r}: give the base id without a vN suffix", INVALID_ID)
 
     results = _query(client, throttle, [arxiv_id])
     if not results:
-        raise PipelineError(NOT_FOUND, f"arXiv returned no entry for {arxiv_id}")
+        raise CrawlError(f"arXiv returned no entry for {arxiv_id}", NOT_FOUND)
     latest = results[0]
     _, latest_version = split_versioned_id(latest.get_short_id())
 
@@ -197,28 +194,28 @@ def discover_one(
     record["latest_version"] = latest_version
     record["versions"] = list(range(1, latest_version + 1))
 
-    record["revised_dates"], warning = _revised_dates(client, http, throttle, arxiv_id, latest)
+    record["revised_dates"], warning = _revised_dates(client, opts, throttle, arxiv_id, latest)
     record["status"] = OK
     record["error_code"] = None
     return warning
 
 
 def make_clients(cfg: Dict[str, Any], throttle: Optional[Throttle] = None):
-    """Build the arxiv client, the HTTP client and (unless given) a Throttle."""
+    """Build the arxiv client, the HTTP options and (unless given) the shared Throttle."""
     client = arxiv.Client(
         page_size=100,
         delay_seconds=cfg["arxiv_delay_seconds"],
         num_retries=cfg["max_retries"],
     )
-    http = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"])
-    return client, http, throttle or Throttle(cfg["arxiv_delay_seconds"])
+    throttle = throttle or Throttle(cfg["arxiv_delay_seconds"])
+    return client, http_options(cfg, throttle), throttle
 
 
 def discover_paper(
     cfg: Dict[str, Any],
     arxiv_id: str,
     client: arxiv.Client,
-    http: RequestClient,
+    opts: Dict[str, Any],
     throttle: Throttle,
     events: EventLog,
 ) -> str:
@@ -237,7 +234,7 @@ def discover_paper(
     watch = Stopwatch()
     record = make_record(arxiv_id)
     try:
-        warning = discover_one(arxiv_id, client, http, throttle, record)
+        warning = discover_one(arxiv_id, client, opts, throttle, record)
     except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
         error = _classify_arxiv_error(exc)
         record["status"] = FAILED
@@ -245,7 +242,7 @@ def discover_paper(
         status = FAILED
         events.log(
             STAGE, FAILED, arxiv_id=arxiv_id, error_code=error.error_code,
-            http_status=error.http_status, attempts=error.attempts,
+            http_status=error.http_status,
             message=str(error)[:300], elapsed_seconds=watch.elapsed,
         )
     else:
@@ -253,7 +250,7 @@ def discover_paper(
         if warning:
             events.log(
                 STAGE, OK, arxiv_id=arxiv_id, error_code=warning.error_code,
-                http_status=warning.http_status, attempts=warning.attempts,
+                http_status=warning.http_status,
                 message=f"revised_dates unavailable: {str(warning)[:250]}",
                 elapsed_seconds=watch.elapsed,
             )
@@ -268,11 +265,11 @@ def run_discovery(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dic
     run_dir = cfg["output_root"] / cfg["run_id"]
     if events is None:
         events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
-    client, http, throttle = make_clients(cfg)
+    client, opts, throttle = make_clients(cfg)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        counts[discover_paper(cfg, arxiv_id, client, http, throttle, events)] += 1
+        counts[discover_paper(cfg, arxiv_id, client, opts, throttle, events)] += 1
     return counts
 
 

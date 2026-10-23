@@ -1,3 +1,16 @@
+# error code
+TIMEOUT = "TIMEOUT"
+NETWORK_ERROR = "NETWORK_ERROR"
+HTTP_429 = "HTTP_429"
+HTTP_4XX = "HTTP_4XX"
+HTTP_5XX = "HTTP_5XX"
+NOT_FOUND = "NOT_FOUND"
+INVALID_RESPONSE = "INVALID_RESPONSE"
+REQUEST_ERROR = "REQUEST_ERROR"
+INVALID_ID = "INVALID_ID"
+CORRUPT_SOURCE = "CORRUPT_SOURCE"
+UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
+
 class CrawlError(Exception):
     """Base crawler error with a stable error code and optional HTTP status."""
 
@@ -6,6 +19,9 @@ class CrawlError(Exception):
         self.error_code = error_code
         self.status_code = status_code
 
+    @property
+    def http_status(self):
+        return self.status_code
 
 class NetworkError(CrawlError):
     def __init__(self, message="Network connection failed"):
