@@ -138,13 +138,9 @@ def _dates_from_api(
     return dates
 
 
-def _dates_from_abs(http: RequestClient, throttle: Throttle, arxiv_id: str) -> Dict[int, str]:
-    throttle.wait()
-    try:
-        response = http.get(ABS_URL.format(arxiv_id=arxiv_id))
-    finally:
-        throttle.mark()
-    return parse_submission_history(response.text)
+def _dates_from_abs(http: RequestClient, arxiv_id: str) -> Dict[int, str]:
+    # utils/http.py waits on the shared throttle before every attempt: no manual wait here.
+    return parse_submission_history(http.get_text(ABS_URL.format(arxiv_id=arxiv_id)))
 
 
 def _revised_dates(
@@ -159,7 +155,7 @@ def _revised_dates(
     sources = []
     if "/" not in arxiv_id:  # old-style ids: API cannot serve versioned ids
         sources.append(lambda: _dates_from_api(client, throttle, arxiv_id, latest_version, latest.updated))
-    sources.append(lambda: _dates_from_abs(http, throttle, arxiv_id))
+    sources.append(lambda: _dates_from_abs(http, arxiv_id))
 
     warning: Optional[PipelineError] = None
     for fetch in sources:
@@ -210,8 +206,9 @@ def make_clients(cfg: Dict[str, Any], throttle: Optional[Throttle] = None):
         delay_seconds=cfg["arxiv_delay_seconds"],
         num_retries=cfg["max_retries"],
     )
-    http = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"])
-    return client, http, throttle or Throttle(cfg["arxiv_delay_seconds"])
+    throttle = throttle or Throttle(cfg["arxiv_delay_seconds"])
+    http = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"], throttle=throttle)
+    return client, http, throttle
 
 
 def discover_paper(

@@ -103,7 +103,7 @@ def process_paper(cfg, arxiv_id, client, http, throttle, hooks, events) -> str:
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, http, throttle, events)
+        counts = download_paper(cfg, arxiv_id, http, events)
         for stage, func in hooks:
             stage_watch = Stopwatch()
             try:

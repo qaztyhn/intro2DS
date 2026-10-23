@@ -13,13 +13,10 @@ import gzip
 import pathlib
 from typing import Any, Dict, Optional
 
-import requests
-
 from ..common import (
     CORRUPT_SOURCE,
     FAILED,
     INVALID_RESPONSE,
-    NETWORK_ERROR,
     OK,
     PENDING,
     SKIPPED,
@@ -37,8 +34,6 @@ from ..request_utils import RequestClient
 
 STAGE = "download"
 SRC_URL = "https://export.arxiv.org/src/{versioned_id}"
-CHUNK_BYTES = 64 * 1024
-MAX_CORRUPT_RELOADS = 1  # "can re-download once before concluding" (CORRUPT_SOURCE)
 
 
 def detect_format(path: pathlib.Path) -> str:
@@ -77,45 +72,20 @@ def make_manifest(arxiv_id: str, version: int) -> Dict[str, Any]:
     }
 
 
-def _stream_to_file(client: RequestClient, url: str, target: pathlib.Path) -> int:
-    """Download ``url`` to ``target``; return bytes written. Re-downloads once if the
-    transfer is cut short or does not match Content-Length."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    part = target.with_suffix(target.suffix + ".part")
-    last_error: Optional[PipelineError] = None
+def _download_archive(client: RequestClient, url: str, target: pathlib.Path) -> int:
+    """Download ``url`` into ``target`` through the shared HTTP layer; return its size in bytes.
 
-    for _ in range(MAX_CORRUPT_RELOADS + 1):
-        response = client.get(url, stream=True)  # network/HTTP errors raised here
-        try:
-            written = 0
-            with part.open("wb") as handle:
-                for chunk in response.iter_content(CHUNK_BYTES):
-                    handle.write(chunk)
-                    written += len(chunk)
-        except requests.RequestException as exc:
-            last_error = PipelineError(NETWORK_ERROR, f"stream interrupted: {exc}")
-            continue
-        finally:
-            response.close()
-
-        expected = response.headers.get("Content-Length")
-        encoded = response.headers.get("Content-Encoding")
-        if written == 0:
-            last_error = PipelineError(INVALID_RESPONSE, "empty response body")
-            continue
-        if expected and not encoded and expected.isdigit() and int(expected) != written:
-            last_error = PipelineError(CORRUPT_SOURCE, f"got {written} bytes, expected {expected}")
-            continue
-        part.replace(target)
-        return written
-
-    part.unlink(missing_ok=True)
-    assert last_error is not None
-    raise last_error
-
+    Retry, backoff and throttling are done by utils/http.py (a cut-short stream is retried there).
+    """
+    client.download(url, target)
+    size = target.stat().st_size
+    if size == 0:
+        target.unlink(missing_ok=True)
+        raise PipelineError(INVALID_RESPONSE, "empty response body")
+    return size
 
 def download_version(
-    cfg: Dict[str, Any], client: RequestClient, throttle: Throttle, arxiv_id: str, version: int
+    cfg: Dict[str, Any], client: RequestClient, arxiv_id: str, version: int
 ) -> Dict[str, Any]:
     """Download one version and return its manifest (also written to disk)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -125,8 +95,7 @@ def download_version(
     archive = run_dir / "tmp" / key / f"v{version}" / "source.archive"
 
     try:
-        throttle.wait()
-        size = _stream_to_file(client, SRC_URL.format(versioned_id=manifest["versioned_id"]), archive)
+        size = _download_archive(client, SRC_URL.format(versioned_id=manifest["versioned_id"]), archive)
         manifest["source_format"] = detect_format(archive)
         manifest["archive_bytes"] = size
         manifest["archive_path"] = archive.relative_to(run_dir).as_posix()
@@ -141,7 +110,7 @@ def download_version(
 
 
 def download_paper(
-    cfg: Dict[str, Any], arxiv_id: str, client: RequestClient, throttle: Throttle, events: EventLog
+    cfg: Dict[str, Any], arxiv_id: str, client: RequestClient, events: EventLog
 ) -> Dict[str, int]:
     """Download every version of one paper. Returns counts per status (one per version)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -164,7 +133,7 @@ def download_paper(
 
         watch = Stopwatch()
         try:
-            manifest = download_version(cfg, client, throttle, arxiv_id, version)
+            manifest = download_version(cfg, client, arxiv_id, version)
         except Exception as exc:  # noqa: BLE001 - one version must never stop the run
             error = exc if isinstance(exc, PipelineError) else PipelineError(INVALID_RESPONSE, repr(exc))
             if not isinstance(exc, PipelineError):  # unexpected bug: still leave a manifest behind
@@ -191,12 +160,12 @@ def run_download(cfg: Dict[str, Any], events: Optional[EventLog] = None) -> Dict
     run_dir = cfg["output_root"] / cfg["run_id"]
     if events is None:
         events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
-    client = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"])
     throttle = Throttle(cfg["arxiv_delay_seconds"])
+    client = RequestClient(cfg["user_agent"], cfg["timeout"], cfg["max_retries"], throttle=throttle)
 
     totals = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        for status, n in download_paper(cfg, arxiv_id, client, throttle, events).items():
+        for status, n in download_paper(cfg, arxiv_id, client, events).items():
             totals[status] += n
     return totals
 
