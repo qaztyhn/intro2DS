@@ -19,9 +19,6 @@ class CrawlError(Exception):
         self.error_code = error_code
         self.status_code = status_code
 
-    @property
-    def http_status(self):
-        return self.status_code
 
 class NetworkError(CrawlError):
     def __init__(self, message="Network connection failed"):
