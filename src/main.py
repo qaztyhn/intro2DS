@@ -5,9 +5,9 @@ Papers are processed one at a time:
 and each paper ends with one "paper" event holding its total processing time.
 A failing paper is logged and the run continues with the next one.
 
-extract / references / storage are optional per-paper hooks and metrics is an optional
-resource sampler (see PAPER_STAGES and start_metrics). A module that does not define its
-function yet is logged as "skipped". Contract: docs/handover-baseline-discovery-download.md
+extract / storage are optional per-paper hooks (a module without its function is logged as
+"skipped"). references and metrics are wired in directly: make_references_hook() and the
+metrics.ResourceMonitor block in main(). Contract: docs/handover-baseline-discovery-download.md
 
     python -m src.main [path/to/config.yaml]
 """
@@ -19,12 +19,14 @@ import platform
 import sys
 from importlib import metadata
 
-from .common import FAILED, OK, SKIPPED, EventLog, Stopwatch, load_ids, read_json, utc_now_iso, write_json_atomic
-from .config import load_config
+from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
+from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .downloader.http import download_paper
+from .references import crawl_references
+from . import metrics
 
-# One hook per paper, each defined by the module's owner:  func(cfg, arxiv_id, events)
+# One hook per paper, each defined by the module's owner:  func(cfg, arxiv_id, logger)
 PAPER_STAGES = (
     ("extract", ".extract", "extract_paper"),
     ("references", ".references", "references_paper"),
@@ -72,45 +74,64 @@ def finish_run(run_dir, record, status, wall):
     record["wall_seconds"] = round(wall.elapsed, 3)
     write_json_atomic(run_dir / "run.json", record)
 
-def start_metrics(cfg, run_dir, events):
-    """Optional resource sampler (Hien). Contract: metrics.start_sampler(cfg, run_dir) -> object with .stop()."""
-    module = importlib.import_module(".metrics", package=__package__)
-    start = getattr(module, "start_sampler", None)
-    if start is None:
-        events.log("metrics", SKIPPED, message="src.metrics.start_sampler not implemented yet")
-        print("metrics: skipped (not implemented yet)")
-        return None
-    return start(cfg, run_dir)
+def make_references_hook(metrics_logger):
+    """Build the references stage hook: func(cfg, arxiv_id, logger)."""
 
-def load_paper_hooks(events):
+    def references_paper(cfg, arxiv_id, logger):
+        run_dir = cfg["output_root"] / cfg["run_id"]
+        path = run_dir / "papers" / paper_key(arxiv_id) / "references.json"
+        existing = read_json(path)
+        if existing and existing.get("status") in (OK, "empty"):
+            logger.log("references", SKIPPED, arxiv_id=arxiv_id, message="already fetched")
+            return
+
+        watch = Stopwatch()
+        on_attempt = metrics.make_request_hook(metrics_logger, "references", arxiv_id=arxiv_id)
+        opts = http_options(cfg, None, on_attempt=on_attempt)
+        opts.pop("throttle")  # references.py already applies its own Semantic Scholar throttle (S2)
+        with metrics.measure_stage(metrics_logger, "references", arxiv_id=arxiv_id):
+            result = crawl_references(arxiv_id, **opts)
+
+        write_json_atomic(path, result)
+        logger.log(
+            "references", result["status"], arxiv_id=arxiv_id, error_code=result["error_code"],
+            elapsed_seconds=watch.elapsed, message=f"{len(result['references'])} references",
+        )
+
+    return references_paper
+
+def load_paper_hooks(logger, metrics_logger):
     """Return [(stage, func)] for the stage hooks that exist. Missing ones are logged once."""
     hooks = []
     for stage, module_name, func_name in PAPER_STAGES:
+        if stage == "references":
+            hooks.append((stage, make_references_hook(metrics_logger)))
+            continue
         module = importlib.import_module(module_name, package=__package__)
         func = getattr(module, func_name, None)
         if func is None:
-            events.log(stage, SKIPPED, message=f"{module_name}.{func_name} not implemented yet")
+            logger.log(stage, SKIPPED, message=f"{module_name}.{func_name} not implemented yet")
             print(f"{stage}: skipped (not implemented yet)")
         else:
             hooks.append((stage, func))
     return hooks
 
-def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, events) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
-    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, events)
+    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, logger)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, opts, events)
+        counts = download_paper(cfg, arxiv_id, opts, logger)
         for stage, func in hooks:
             stage_watch = Stopwatch()
             try:
-                func(cfg, arxiv_id, events)
+                func(cfg, arxiv_id, logger)
             except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
                 stage_failed = True
-                events.log(
+                logger.log(
                     stage, FAILED, arxiv_id=arxiv_id, error_code=type(exc).__name__,
                     message=str(exc)[:300], elapsed_seconds=stage_watch.elapsed,
                 )
@@ -121,7 +142,7 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, events) -> str:
         status = SKIPPED
     else:
         status = OK
-    events.log(
+    logger.log(
         "paper", status, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed,
         message=f"discovery={d_status} versions ok/failed/skipped="
                 f"{counts[OK]}/{counts[FAILED]}/{counts[SKIPPED]}",
@@ -135,44 +156,46 @@ def main() -> None:
     record = build_run_record(cfg, run_dir, load_ids(cfg["ids_file"]))
     write_json_atomic(run_dir / "run.json", record)
 
-    events = EventLog(run_dir / "events.jsonl", cfg["run_id"])
+    logger = EventLogger(run_dir / "events.jsonl", cfg["run_id"])
+    metrics_logger = metrics.EventLogger(run_dir / "metrics_events.jsonl", cfg["run_id"])
     wall = Stopwatch()
-    events.log("pipeline", "running", message=f"start, cache_mode={record['cache_mode']}")
+    logger.log("pipeline", "running", message=f"start, cache_mode={record['cache_mode']}")
     print(f"run_id={cfg['run_id']} cache_mode={record['cache_mode']}")
 
     status = "completed"
-    sampler = None
+    monitor = None
     try:
-        sampler = start_metrics(cfg, run_dir, events)
-        hooks = load_paper_hooks(events)
+        hooks = load_paper_hooks(logger, metrics_logger)
         client, opts, throttle = make_clients(cfg)  # one Throttle shared by discovery and download
         ids = record["input_ids"]
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
-        for index, arxiv_id in enumerate(ids, start=1):
-            paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, events)
-            counts[paper_status] += 1
-            print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
-        print("papers:", counts)
+        with metrics.ResourceMonitor(run_dir) as monitor:
+            for index, arxiv_id in enumerate(ids, start=1):
+                paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger)
+                counts[paper_status] += 1
+                print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
+            print("papers:", counts)
     except KeyboardInterrupt:
         status = "interrupted"
-        events.log("pipeline", FAILED, error_code="INTERRUPTED",
+        logger.log("pipeline", FAILED, error_code="INTERRUPTED",
                    message="stopped by user (Ctrl+C)", elapsed_seconds=wall.elapsed)
         print("interrupted; run again with the same run_id to resume")
     except Exception as exc:  # noqa: BLE001 - record the crash, then re-raise
         status = "crashed"
-        events.log("pipeline", FAILED, error_code=type(exc).__name__,
+        logger.log("pipeline", FAILED, error_code=type(exc).__name__,
                    message=str(exc)[:300], elapsed_seconds=wall.elapsed)
         raise
     else:
-        events.log("pipeline", "ok", elapsed_seconds=wall.elapsed,
+        logger.log("pipeline", "ok", elapsed_seconds=wall.elapsed,
                    message=f"end, papers ok/failed/skipped={counts[OK]}/{counts[FAILED]}/{counts[SKIPPED]}")
         print(f"pipeline wall time: {wall.elapsed:.1f}s")
     finally:
-        if sampler is not None:
+        if monitor is not None:
             try:
-                sampler.stop()
-            except Exception as exc:  # noqa: BLE001 - a broken sampler must not hide the run result
-                events.log("metrics", FAILED, error_code=type(exc).__name__, message=str(exc)[:300])
+                (run_dir / "papers").mkdir(parents=True, exist_ok=True)
+                metrics.log_resource_results(metrics_logger, monitor.sampler, run_dir / "papers")
+            except Exception as exc:  
+                logger.log("metrics", FAILED, error_code=type(exc).__name__, message=str(exc)[:300])
         finish_run(run_dir, record, status, wall)
 
 if __name__ == "__main__":

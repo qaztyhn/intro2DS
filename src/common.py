@@ -77,7 +77,7 @@ def read_json(path: pathlib.Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-class EventLog:
+class EventLogger:
     """Append-only events.jsonl for one run. One line per event."""
 
     def __init__(self, path: pathlib.Path, run_id: str):
