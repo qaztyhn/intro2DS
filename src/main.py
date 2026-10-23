@@ -5,9 +5,9 @@ Papers are processed one at a time:
 and each paper ends with one "paper" event holding its total processing time.
 A failing paper is logged and the run continues with the next one.
 
-extract / references / storage are optional per-paper hooks and metrics is an optional
-resource sampler (see PAPER_STAGES and start_metrics). A module that does not define its
-function yet is logged as "skipped". Contract: docs/handover-baseline-discovery-download.md
+extract / storage are optional per-paper hooks (a module without its function is logged as
+"skipped"). references and metrics are wired in directly: make_references_hook() and the
+metrics.ResourceMonitor block in main(). Contract: docs/handover-baseline-discovery-download.md
 
     python -m src.main [path/to/config.yaml]
 """

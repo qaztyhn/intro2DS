@@ -66,9 +66,9 @@ Each paper ends with one `paper` event (status, total seconds). One failing pape
 | Module | Function | Called as |
 |---|---|---|
 | `src/extract.py` | `extract_paper` | `extract_paper(cfg, arxiv_id, logger)` |
-| `src/references.py` | `references_paper` | `references_paper(cfg, arxiv_id, logger)` |
+| `src/references.py` | `crawl_references` | called from `make_references_hook` in `src/main.py`; writes `<run_dir>/papers/<paper_key>/references.json` |
 | `src/storage.py` | `store_paper` | `store_paper(cfg, arxiv_id, logger)` |
-| `src/metrics.py` | `start_sampler` | `start_sampler(cfg, run_dir)` returns an object with `.stop()` |
+| `src/metrics.py` | `ResourceMonitor` | used directly in `src.main` to sample RAM and disk; its logs go to `metrics_events.jsonl` |
 
 Rules for hooks: idempotent (skip work already done on resume), log with `logger.log(stage, status, arxiv_id=..., ...)`,
 raise on unexpected errors (the driver logs them and continues), read inputs from `<run_dir>/papers/<paper_key>/`.
