@@ -1,0 +1,28 @@
+"""The driver wires extract, references and storage; none is skipped."""
+
+import pytest
+
+from src import main, metrics
+from src.common import EventLogger
+from src.utils.errors import CrawlError
+
+
+def test_all_paper_stages_are_wired_in_order(tmp_path):
+    metrics_logger = metrics.EventLogger(tmp_path / "metrics_events.jsonl", "offline")
+    hooks = main.load_paper_hooks(None, metrics_logger)
+    assert [stage for stage, _ in hooks] == ["extract", "references", "storage"]
+    assert all(callable(func) for _, func in hooks)
+
+
+def test_storage_hook_is_measured_even_when_validation_fails(tmp_path):
+    cfg = {"output_root": tmp_path, "run_id": "offline"}
+    logger = EventLogger(tmp_path / "events.jsonl", "offline")
+    metrics_logger = metrics.EventLogger(tmp_path / "metrics_events.jsonl", "offline")
+    storage = dict(main.load_paper_hooks(logger, metrics_logger))["storage"]
+    with pytest.raises(CrawlError):  # no corpus on disk, so validation reports failure
+        storage(cfg, "2507.01659", logger)
+    events = metrics.read_events(tmp_path / "metrics_events.jsonl")
+    finished = [e for e in events if e["stage"] == "storage" and e["event"] == "finished"]
+    assert len(finished) == 1
+    assert finished[0]["status"] == "failed"
+    assert finished[0]["arxiv_id"] == "2507.01659"

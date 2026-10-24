@@ -4,6 +4,7 @@ Only regular .tex/.bib files enter source/. Bytes and relative paths are kept.
 No tarfile.extract/all calls: links, special entries and unsafe names fail closed.
 """
 
+import contextlib
 import gzip
 import os
 import pathlib
@@ -12,13 +13,10 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 
-from .common import (EMPTY, FAILED, OK, SKIPPED, Stopwatch, read_json,
-                     write_json_atomic)
-from .schema import (NO_TEX_SOURCE, no_symlinks, paper_directory, relative_path,
-                     require_version, safe_path)
-from .utils.errors import (CORRUPT_SOURCE, INVALID_RESPONSE, NOT_FOUND,
-                           UNSUPPORTED_FORMAT, CrawlError)
-
+from .common import (EMPTY, FAILED, OK, SKIPPED, Stopwatch, read_json, write_json_atomic)
+from .schema import (NO_TEX_SOURCE, no_symlinks, paper_directory, relative_path, require_version, safe_path)
+from .utils.errors import (CORRUPT_SOURCE, INVALID_RESPONSE, NOT_FOUND, UNSUPPORTED_FORMAT, CrawlError)
+from .metrics import measure_stage
 
 @dataclass(frozen=True)
 class ExtractionLimits:
@@ -57,14 +55,24 @@ def _is_tex(head):
 
 
 class _TarReader:
-    """Bound tarfile's internal PAX/GNU header reads before it creates a member."""
+    """Bound the bytes tarfile reads for the headers of one member."""
 
     def __init__(self, handle):
         self.handle = handle
+        self.header_bytes = 0
+        self.in_data = False
+
+    def start_header(self):
+        self.header_bytes = 0
+        self.in_data = False
 
     def read(self, size=-1):
         if size < 0 or size > 1024 * 1024:
             raise CrawlError("tar header/read exceeds size limit", CORRUPT_SOURCE)
+        if not self.in_data:
+            self.header_bytes += size
+            if self.header_bytes > 1024 * 1024:
+                raise CrawlError("tar header/read exceeds size limit", CORRUPT_SOURCE)
         return self.handle.read(size)
 
     def seek(self, *args):
@@ -81,11 +89,20 @@ def _is_tar(payload):
     except tarfile.TarError:
         return False
 
-
+def _members(archive, reader):
+    """Yield members one by one, giving each member's headers a fresh byte budget."""
+    while True:
+        reader.start_header()
+        member = archive.next()
+        if member is None:
+            return
+        reader.in_data = True  # from here until the next start_header, only data is read
+        yield member
+        
 def _extract_tar(payload, stage, limits):
     total, kept, files, seen = 0, 0, [], set()
-    with payload.open("rb") as handle, tarfile.open(fileobj=_TarReader(handle), mode="r:") as archive:
-        for count, member in enumerate(archive, 1):
+    with payload.open("rb") as handle, tarfile.open(fileobj=(reader := _TarReader(handle)), mode="r:") as archive:
+        for count, member in enumerate(_members(archive, reader), 1):
             if count > limits.max_members:
                 raise CrawlError("too many archive members", CORRUPT_SOURCE)
             # A conventional top-level './' directory contains no data.
@@ -276,12 +293,12 @@ def extract_version(cfg, arxiv_id, version):
     return manifest
 
 
-def extract_paper(cfg, arxiv_id, events):
+def extract_paper(cfg, arxiv_id, logger, metrics_logger=None):
     """Driver hook: process all discovered versions, then propagate any failures."""
     paper = paper_directory(cfg, arxiv_id)
     metadata = read_json(safe_path(paper, "metadata.json"))
     if not metadata or metadata.get("status") != OK or not metadata.get("versions"):
-        events.log("extract", SKIPPED, arxiv_id=arxiv_id, message="no discovered versions")
+        logger.log("extract", SKIPPED, arxiv_id=arxiv_id, message="no discovered versions")
         return {}
     results, errors = {}, []
     for version in metadata["versions"]:
@@ -291,7 +308,10 @@ def extract_paper(cfg, arxiv_id, events):
             previous = read_json(safe_path(paper, f"versions/v{version}/manifest.json"))
             cached = (isinstance(previous, dict)
                       and previous.get("extract_status") in (OK, EMPTY))
-            result = extract_version(cfg, arxiv_id, version)
+            timing = (measure_stage(metrics_logger, "extract", arxiv_id=arxiv_id, version=version)
+                    if metrics_logger is not None else contextlib.nullcontext())
+            with timing:
+                result = extract_version(cfg, arxiv_id, version)
             results[version] = result
             status = result["extract_status"]
             if result["download_status"] != OK:
@@ -300,13 +320,13 @@ def extract_paper(cfg, arxiv_id, events):
                 errors.append(result.get("error_code"))
             if cached:
                 status = SKIPPED
-            events.log("extract", status, arxiv_id=arxiv_id, version=version,
+            logger.log("extract", status, arxiv_id=arxiv_id, version=version,
                        error_code=result.get("error_code"), elapsed_seconds=watch.elapsed,
                        message="using completed source" if cached else None)
         except (CrawlError, ValueError, OSError) as exc:
             code = exc.error_code if isinstance(exc, CrawlError) else INVALID_RESPONSE
             errors.append(code)
-            events.log("extract", FAILED, arxiv_id=arxiv_id, version=version,
+            logger.log("extract", FAILED, arxiv_id=arxiv_id, version=version,
                        error_code=code, message=str(exc)[:300], elapsed_seconds=watch.elapsed)
     if errors:
         raise CrawlError("one or more versions failed extraction", errors[0])

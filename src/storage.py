@@ -196,7 +196,7 @@ def load_paper(cfg, arxiv_id):
             "versions": versions}
 
 
-def store_paper(cfg, arxiv_id, events):
+def store_paper(cfg, arxiv_id, logger):
     """Driver hook: validate the canonical files; do not copy or rewrite them."""
     from .validation import validate_paper
     from .utils.errors import CrawlError
@@ -205,7 +205,7 @@ def store_paper(cfg, arxiv_id, events):
     report = validate_paper(cfg, arxiv_id)
     path = safe_path(paper_directory(cfg, arxiv_id), "validation.json")
     write_json_atomic(path, report)
-    events.log("storage", report["status"], arxiv_id=arxiv_id,
+    logger.log("storage", report["status"], arxiv_id=arxiv_id,
                error_code="SCHEMA_ERROR" if report["status"] == "failed" else None,
                message=f"validation issues={len(report['issues'])}", elapsed_seconds=watch.elapsed)
     if report["status"] != "ok":
