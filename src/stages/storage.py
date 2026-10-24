@@ -6,8 +6,8 @@ downloader's manifest and discovery's metadata remain the canonical records.
 
 import json
 
-from .common import EMPTY, OK, Stopwatch, write_json_atomic
-from .schema import (MANIFEST_FIELDS, REFERENCE_FIELDS, STATUSES, paper_directory,
+from ..common import EMPTY, OK, Stopwatch, write_json_atomic
+from ..schema import (MANIFEST_FIELDS, REFERENCE_FIELDS, STATUSES, paper_directory,
                      require_version, safe_path)
 
 
@@ -199,7 +199,7 @@ def load_paper(cfg, arxiv_id):
 def store_paper(cfg, arxiv_id, logger):
     """Driver hook: validate the canonical files; do not copy or rewrite them."""
     from .validation import validate_paper
-    from .utils.errors import CrawlError
+    from ..utils.errors import CrawlError
 
     watch = Stopwatch()
     report = validate_paper(cfg, arxiv_id)

@@ -2,9 +2,9 @@
 
 import os
 from datetime import datetime, timezone
-from .utils.errors import InvalidResponseError
-from .utils.http import request_json, S2
-from .utils.errors import (
+from ..utils.errors import InvalidResponseError
+from ..utils.http import request_json, S2
+from ..utils.errors import (
     CrawlError,
     InvalidResponseError
 )
