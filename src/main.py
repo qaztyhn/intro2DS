@@ -5,9 +5,10 @@ Papers are processed one at a time:
 and each paper ends with one "paper" event holding its total processing time.
 A failing paper is logged and the run continues with the next one.
 
-extract / storage are optional per-paper hooks (a module without its function is logged as
-"skipped"). references and metrics are wired in directly: make_references_hook() and the
-metrics.ResourceMonitor block in main(). Contract: docs/handover-baseline-discovery-download.md
+extract, references and storage are wired in directly through make_extract_hook(),
+make_references_hook() and make_storage_hook(); each one is timed with metrics.measure_stage and
+written to metrics_events.jsonl. metrics.ResourceMonitor wraps the whole paper loop in main().
+Contract: docs/handover-baseline-discovery-download.md
 
     python -m src.main [path/to/config.yaml]
 """
@@ -23,15 +24,12 @@ from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .downloader.http import download_paper
+from .extract import extract_paper
 from .references import crawl_references
+from .storage import store_paper
 from . import metrics
 
-# One hook per paper, each defined by the module's owner:  func(cfg, arxiv_id, logger)
-PAPER_STAGES = (
-    ("extract", ".extract", "extract_paper"),
-    ("references", ".references", "references_paper"),
-    ("storage", ".storage", "store_paper"),
-)
+PAPER_STAGES = ( "extract", "references", "storage")
 
 def _package_version(name: str):
     try:
@@ -100,21 +98,31 @@ def make_references_hook(metrics_logger):
 
     return references_paper
 
+def make_extract_hook(metrics_logger):
+    """Build the extract stage hook: func(cfg, arxiv_id, logger). One measured operation per version."""
+
+    def extract_hook(cfg, arxiv_id, logger):
+        extract_paper(cfg, arxiv_id, logger, metrics_logger=metrics_logger)
+
+    return extract_hook
+
+def make_storage_hook(metrics_logger):
+    """Build the storage stage hook: func(cfg, arxiv_id, logger). One measured operation per paper."""
+
+    def storage_hook(cfg, arxiv_id, logger):
+        with metrics.measure_stage(metrics_logger, "storage", arxiv_id=arxiv_id):
+            store_paper(cfg, arxiv_id, logger)
+
+    return storage_hook
+
 def load_paper_hooks(logger, metrics_logger):
-    """Return [(stage, func)] for the stage hooks that exist. Missing ones are logged once."""
-    hooks = []
-    for stage, module_name, func_name in PAPER_STAGES:
-        if stage == "references":
-            hooks.append((stage, make_references_hook(metrics_logger)))
-            continue
-        module = importlib.import_module(module_name, package=__package__)
-        func = getattr(module, func_name, None)
-        if func is None:
-            logger.log(stage, SKIPPED, message=f"{module_name}.{func_name} not implemented yet")
-            print(f"{stage}: skipped (not implemented yet)")
-        else:
-            hooks.append((stage, func))
-    return hooks
+    """Return [(stage, func)] in PAPER_STAGES order. All stages are implemented, none is skipped."""
+    factories = {
+        "extract": make_extract_hook,
+        "references": make_references_hook,
+        "storage": make_storage_hook,
+    }
+    return [(stage, factories[stage](metrics_logger)) for stage in PAPER_STAGES]
 
 def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""

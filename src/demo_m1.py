@@ -9,12 +9,11 @@ import io
 import pathlib
 import tarfile
 
-from .common import EventLog, read_json, write_json_atomic
+from .common import EventLogger, read_json, write_json_atomic
 from .downloader.http import make_manifest
 from .extract import extract_paper
 from .schema import no_symlinks, paper_directory
-from .storage import (load_manifest, load_paper, save_manifest, save_metadata,
-                      save_references, store_paper)
+from .storage import (load_manifest, load_paper, save_manifest, save_metadata, save_references, store_paper)
 from .validation import validate_run
 
 DEMO_ID = "2507.01659"  # The fixture is invented, not this real paper's content.
@@ -62,12 +61,12 @@ def run_demo(run_dir):
         fetched_at="2026-10-23T00:00:00+00:00", references=[dict(
             arxiv_id=DEMO_ID, ref_arxiv_id=None, ref_title="Synthetic non-arXiv reference",
             ref_authors=[], ref_submission_date=None, ref_s2_id="synthetic-s2-id")]))
-    events = EventLog(run / "events.jsonl", run.name)
-    extract_paper(cfg, DEMO_ID, events)
-    store_paper(cfg, DEMO_ID, events)
+    logger = EventLogger(run / "events.jsonl", run.name)
+    extract_paper(cfg, DEMO_ID, logger)
+    store_paper(cfg, DEMO_ID, logger)
     before = load_paper(cfg, DEMO_ID)
-    extract_paper(cfg, DEMO_ID, events)
-    store_paper(cfg, DEMO_ID, events)
+    extract_paper(cfg, DEMO_ID, logger)
+    store_paper(cfg, DEMO_ID, logger)
     if before != load_paper(cfg, DEMO_ID):
         raise RuntimeError("demo resume unexpectedly changed the corpus")
     report = validate_run(cfg)
