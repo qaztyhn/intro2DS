@@ -6,11 +6,12 @@ import tarfile
 
 import pytest
 
-from src.common import EventLog, read_json, write_json_atomic
+from src.common import EventLogger, read_json, write_json_atomic
 from src.downloader.http import make_manifest
 from src.extract import ExtractionLimits, extract_paper, extract_source, extract_version
 from src.schema import paper_directory
 from src.utils.errors import CrawlError
+from src import metrics
 
 TEX = b"\\documentclass{article}\r\n% original bytes \xff\r\n\\includegraphics{a}\n"
 
@@ -234,8 +235,37 @@ def test_hook_finishes_other_versions_before_reporting_failure(tmp_path):
     cfg, paper, _ = seed_version(tmp_path, version=1, content=b"bad")
     seed_version(tmp_path, version=2)
     write_json_atomic(paper / "metadata.json", {"status": "ok", "versions": [1, 2]})
-    events = EventLog(tmp_path / "events.jsonl", "offline")
+    logger = EventLogger(tmp_path / "events.jsonl", "offline")
     with pytest.raises(CrawlError):
-        extract_paper(cfg, "2507.01659", events)
+        extract_paper(cfg, "2507.01659", logger)
     assert read_json(paper / "versions/v1/manifest.json")["extract_status"] == "failed"
     assert read_json(paper / "versions/v2/manifest.json")["extract_status"] == "ok"
+
+def test_hook_measures_each_version_when_metrics_logger_is_given(tmp_path):
+    cfg, paper, _ = seed_version(tmp_path, version=1)
+    seed_version(tmp_path, version=2)
+    write_json_atomic(paper / "metadata.json", {"status": "ok", "versions": [1, 2]})
+    logger = EventLogger(tmp_path / "events.jsonl", "offline")
+    metrics_logger = metrics.EventLogger(tmp_path / "metrics_events.jsonl", "offline")
+    extract_paper(cfg, "2507.01659", logger, metrics_logger=metrics_logger)
+    events = metrics.read_events(tmp_path / "metrics_events.jsonl")
+    finished = [e for e in events if e["stage"] == "extract" and e["event"] == "finished"]
+    assert [e["version"] for e in finished] == [1, 2]
+    assert {e["status"] for e in finished} == {"ok"}
+    assert {e["arxiv_id"] for e in finished} == {"2507.01659"}
+
+def test_header_budget_is_per_member_not_per_archive(tmp_path):
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for index in range(6):
+            data = bytes([index]) * (300 * 1024)  # 6 members x 300 KiB, well over 1 MiB in total
+            member = tarfile.TarInfo(f"figure{index}.pdf")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        archive.addfile(tarfile.TarInfo("main.tex"), io.BytesIO(b""))
+        tex = tarfile.TarInfo("paper.tex")
+        tex.size = len(TEX)
+        archive.addfile(tex, io.BytesIO(TEX))
+    result, output = extract(tmp_path, stream.getvalue())
+    assert result["error_code"] is None
+    assert result["extract_status"] == "ok"
