@@ -278,7 +278,10 @@ class ResourceMonitor:
         return False
 
 class EventLogger:
-    """Append structured events to a JSONL file."""
+    """Append structured events to a JSONL file (metrics_events.jsonl).
+
+    Not the same class as common.EventLogger, which writes the run-level events.jsonl.
+    """
 
     def __init__(self, path: str | Path, run_id: str):
         if not isinstance(run_id, str) or not run_id.strip():

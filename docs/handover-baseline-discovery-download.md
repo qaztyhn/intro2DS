@@ -40,9 +40,9 @@ Một dòng `events.jsonl`:
 
 | File | Chủ | Hàm | Gọi như |
 |---|---|---|---|
-| `src/extract.py` | Linh | `extract_paper` | gọi từ `make_extract_hook` trong `main.py`: `extract_paper(cfg, arxiv_id, logger, metrics_logger=None)`, mỗi phiên bản là một operation `extract` |
-| `src/references.py` | Châu | `crawl_references` | gọi từ `make_references_hook` trong `main.py`, ghi `papers/<key>/references.json` |
-| `src/storage.py` | Linh | `store_paper` | gọi từ `make_storage_hook` trong `main.py`: `store_paper(cfg, arxiv_id, logger)`, mỗi bài là một operation `storage` |
+| `src/stages/extract.py` | Linh | `extract_paper` | gọi từ `make_extract_hook` trong `main.py`: `extract_paper(cfg, arxiv_id, logger, metrics_logger=None)`, mỗi phiên bản là một operation `extract` |
+| `src/stages/references.py` | Châu | `crawl_references` | gọi từ `make_references_hook` trong `main.py`, ghi `papers/<key>/references.json` |
+| `src/stages/storage.py` | Linh | `store_paper` | gọi từ `make_storage_hook` trong `main.py`: `store_paper(cfg, arxiv_id, logger)`, mỗi bài là một operation `storage` |
 | `src/metrics.py` | Hiền | `ResourceMonitor`, `EventLogger`, `make_request_hook`, `measure_stage`, `log_resource_results` | dùng trực tiếp trong `main.py`, log ghi vào `metrics_events.jsonl` |
 
 Quy tắc chung:
@@ -54,7 +54,7 @@ Quy tắc chung:
 
 ## 4. Việc của từng người
 
-### Linh: `src/extract.py`, `src/storage.py`
+### Linh: `src/stages/extract.py`, `src/stages/storage.py`
 Đọc: `src/downloader/http.py` (hàm `make_manifest`, `detect_format`), `src/common.py`, mục 2 ở trên.
 - Đầu vào: `manifest.json` của từng phiên bản, trong đó `archive_path` (tương đối với thư mục run), `source_format` (tar.gz, gz, tar, pdf, unknown).
 - Chỉ giữ `.tex`/`.bib`, giữ đường dẫn tương đối, không sửa nội dung. Gợi ý đặt ở `papers/<key>/versions/v<N>/source/`.
@@ -63,7 +63,7 @@ Quy tắc chung:
 - Nên xóa `tmp/.../source.archive` sau khi extract xong để giảm đĩa. Phải ghi `archive_bytes` trước khi xóa (hiện đã ghi sẵn).
 - Trong tập thử 20 bài có 1 phiên bản `pdf`, dùng nó để kiểm tra trường hợp rỗng.
 
-### Châu: `src/references.py`, `src/utils/http.py`
+### Châu: `src/stages/references.py`, `src/utils/http.py`
 Đọc: `src/utils/http.py` (`request_with_retry`, `request_json`, `request_text`, `download_file`), `src/utils/errors.py`, mục 3.
 - Gọi Semantic Scholar theo ID bài (không theo phiên bản), lưu **mọi** reference kể cả không có arXiv ID,
   kèm `status`, `fetched_at`, nguồn. Gợi ý: `papers/<key>/references.json`.
@@ -111,7 +111,7 @@ Kiểm tra hook của bạn mà không sửa file của ai (ví dụ cho Châu, 
 
     python - <<'EOF'
     import sys
-    import src.extract as rf, rf.extract_paper = fake
+    import src.stages.extract as rf, rf.extract_paper = fake
     def fake(cfg, arxiv_id, logger):
         logger.log("extract", "ok", arxiv_id=arxiv_id, message="fake")
     rf.references_paper = fake

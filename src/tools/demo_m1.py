@@ -9,12 +9,12 @@ import io
 import pathlib
 import tarfile
 
-from .common import EventLogger, read_json, write_json_atomic
-from .downloader.http import make_manifest
-from .extract import extract_paper
-from .schema import no_symlinks, paper_directory
-from .storage import (load_manifest, load_paper, save_manifest, save_metadata, save_references, store_paper)
-from .validation import validate_run
+from ..common import EventLogger, read_json, write_json_atomic
+from ..downloader.http import make_manifest
+from ..stages.extract import extract_paper
+from ..schema import no_symlinks, paper_directory
+from ..stages.storage import (load_manifest, load_paper, save_manifest, save_metadata, save_references, store_paper)
+from ..stages.validation import validate_run
 
 DEMO_ID = "2507.01659"  # The fixture is invented, not this real paper's content.
 

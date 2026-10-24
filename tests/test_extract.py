@@ -8,7 +8,7 @@ import pytest
 
 from src.common import EventLogger, read_json, write_json_atomic
 from src.downloader.http import make_manifest
-from src.extract import ExtractionLimits, extract_paper, extract_source, extract_version
+from src.stages.extract import ExtractionLimits, extract_paper, extract_source, extract_version
 from src.schema import paper_directory
 from src.utils.errors import CrawlError
 from src import metrics
@@ -198,7 +198,7 @@ def test_manifest_resume_without_archive_and_old_id(tmp_path):
 
 def test_resume_after_source_published_but_manifest_write_interrupted(tmp_path, monkeypatch):
     cfg, paper, _ = seed_version(tmp_path)
-    import src.extract as module
+    import src.stages.extract as module
     original = module.write_json_atomic
     def interrupted(*args):
         raise OSError("interrupted manifest write")

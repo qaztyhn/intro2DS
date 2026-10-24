@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import json
 
-from .metrics import write_run_report
+from ..metrics import write_run_report
 import tarfile
 
 
