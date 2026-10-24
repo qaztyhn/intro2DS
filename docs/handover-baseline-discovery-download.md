@@ -1,7 +1,7 @@
 # Handover: Baseline B (Hương) -> Linh, Châu, Hiền
 
 Trạng thái: **discovery + download + điều phối đã chạy được và đã kiểm tra**.
-Baseline chạy từ đầu đến cuối khi extract và storage có hàm theo hợp đồng bên dưới. Hiện extract.py, storage.pycòn rỗng và được ghiskipped; references và metrics đã được nối trực tiếp trong main.py.
+Baseline chạy từ đầu đến cuối: extract, references và storage đều đã được nối trực tiếp trong main.py (`make_extract_hook`, `make_references_hook`, `make_storage_hook`) và được đo bằng `measure_stage`; metrics bọc cả vòng lặp bằng `ResourceMonitor`.
 
 ## 1. Pipeline hoạt động thế nào
 
@@ -40,9 +40,9 @@ Một dòng `events.jsonl`:
 
 | File | Chủ | Hàm | Gọi như |
 |---|---|---|---|
-| `src/extract.py` | Linh | `extract_paper` | `extract_paper(cfg, arxiv_id, logger)` |
+| `src/extract.py` | Linh | `extract_paper` | gọi từ `make_extract_hook` trong `main.py`: `extract_paper(cfg, arxiv_id, logger, metrics_logger=None)`, mỗi phiên bản là một operation `extract` |
 | `src/references.py` | Châu | `crawl_references` | gọi từ `make_references_hook` trong `main.py`, ghi `papers/<key>/references.json` |
-| `src/storage.py` | Linh | `store_paper` | `store_paper(cfg, arxiv_id, logger)` |
+| `src/storage.py` | Linh | `store_paper` | gọi từ `make_storage_hook` trong `main.py`: `store_paper(cfg, arxiv_id, logger)`, mỗi bài là một operation `storage` |
 | `src/metrics.py` | Hiền | `ResourceMonitor`, `EventLogger`, `make_request_hook`, `measure_stage`, `log_resource_results` | dùng trực tiếp trong `main.py`, log ghi vào `metrics_events.jsonl` |
 
 Quy tắc chung:
@@ -50,7 +50,7 @@ Quy tắc chung:
 - Ghi log bằng `logger.log(stage, status, arxiv_id=..., version=..., error_code=..., elapsed_seconds=...)`.
 - Lỗi bất ngờ cứ ném ra: `process_paper` bắt, ghi sự kiện `failed` rồi đi tiếp.
 - Đọc `cfg["output_root"] / cfg["run_id"]` để biết thư mục run. Ghi file bằng `write_json_atomic` trong `common.py`.
-- Hàm chưa có thì pipeline ghi `skipped`, không báo lỗi.
+- Cả ba stage (extract, references, storage) đã được nối trong `main.py`. Hook ném lỗi thì bài đó ghi `failed` và pipeline đi tiếp.
 
 ## 4. Việc của từng người
 
@@ -131,7 +131,7 @@ chưa tính references. Cần đặt `run_id` cố định và lưu `experiments
 
 ## 6. Chưa làm / lưu ý
 
-  - `extract`, `storage` chưa có hàm, đang `skipped`. references và metrics đã nối trong `main.py`. Chưa chạy đầy đủ end-to-end.
+  - `extract`, `references`, `storage` đã nối trong `main.py` và được đo bằng `measure_stage` (extract theo phiên bản, references và storage theo bài). Đã kiểm tra offline bằng `python -m src.demo_m1` và `pytest`; chưa chạy end-to-end trên dữ liệu arXiv thật.
   - `main.py` ghi `events.jsonl` bằng `EventLogger` của `common.py` (đã đổi tên từ `EventLog`, tham số `events` thành `logger`).
     Hiền có `EventLogger` riêng trong `metrics.py` ghi `metrics_events.jsonl` với schema khác (`timestamp`, `event`), nên
     `metrics.read_events` chưa đọc được `events.jsonl`. Cần chuyển sang `measure_stage`, và tách pha discovery (cả tập ID)
