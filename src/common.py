@@ -62,10 +62,14 @@ def write_json_atomic(path: pathlib.Path, data: Any) -> None:
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp, path)
+    try: 
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(tmp, path)
+    except BaseException: 
+        tmp.unlink(missing_ok=True) # never leave a stale .tmp behind; the old file stays intact
+        raise
 
 
 def read_json(path: pathlib.Path) -> Optional[Dict[str, Any]]:
