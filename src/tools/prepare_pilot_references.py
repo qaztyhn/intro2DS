@@ -15,7 +15,7 @@ from uuid import uuid4
 import certifi
 
 from .benchmark import inspect_reference_page
-from .metrics import write_run_report
+from ..metrics import write_run_report
 from email.utils import parsedate_to_datetime
 
 

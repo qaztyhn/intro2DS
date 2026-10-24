@@ -1,24 +1,24 @@
 import pytest
 
-from src.benchmark import expand_range
-from src.benchmark import select_sample
+from src.tools.benchmark import expand_range
+from src.tools.benchmark import select_sample
 from copy import deepcopy
 
-from src.benchmark import select_benchmark
-from src.benchmark import select_pilot
+from src.tools.benchmark import select_benchmark
+from src.tools.benchmark import select_pilot
 import xml.etree.ElementTree as ET
 
-from src.benchmark import parse_discovery_response
+from src.tools.benchmark import parse_discovery_response
 import json
 
-from src.benchmark import save_discovery_batch
-from src.benchmark import pending_discovery_ids
+from src.tools.benchmark import save_discovery_batch
+from src.tools.benchmark import pending_discovery_ids
 import hashlib
 import io
 import tarfile
 
-from src.benchmark import inspect_tar_source
-from src.benchmark import inspect_reference_page
+from src.tools.benchmark import inspect_tar_source
+from src.tools.benchmark import inspect_reference_page
 
 def make_range(start_month, start_id, end_month, end_id):
     return {
