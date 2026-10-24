@@ -22,13 +22,22 @@ The crawler supports:
 
 ## Project Structure
 
+## Project Structure
+
+- `src/main.py`: Pipeline orchestration
+- `src/config.py`: Load and validate the run config
+- `src/common.py`: Shared helpers (status constants, paper IDs, JSON I/O, run event log)
+- `src/schema.py`: Manifest fields and path/ID validation
+- `src/metrics.py`: Performance monitoring
 - `src/discovery/`: Paper metadata and version discovery
 - `src/downloader/`: Source downloading
-- `src/stages/extract.py`: Source extraction
-- `src/stages/references.py`: Reference metadata collection
-- `src/stages/storage.py`: Data storage
-- `src/metrics.py`: Performance monitoring
-- `src/main.py`: Pipeline orchestration
+- `src/stages/`: Pipeline stages after download
+  - `extract.py`: Source extraction
+  - `references.py`: Reference metadata collection
+  - `storage.py`: Data storage
+  - `validation.py`: Data validation (used by storage)
+- `src/utils/`: HTTP helpers (throttling, retries) and error codes
+- `src/tools/`: Standalone scripts that `src.main` does not run (`benchmark.py`, `demo_m1.py`, `prepare_pilot_references.py`)
 
 ## Installation
 
