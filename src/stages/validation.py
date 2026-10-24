@@ -5,9 +5,9 @@ import json
 import pathlib
 from datetime import datetime
 
-from .common import paper_key
+from ..common import paper_key
 
-from .schema import (MANIFEST_FIELDS, NO_TEX_SOURCE, REFERENCE_FIELDS,
+from ..schema import (MANIFEST_FIELDS, NO_TEX_SOURCE, REFERENCE_FIELDS,
                      SOURCE_FORMATS, STATUSES, paper_directory, relative_path,
                      safe_path, valid_arxiv_id)
 
