@@ -3,9 +3,9 @@
 import pathlib
 import re
 
-from .common import paper_key
+from .common import EMPTY, FAILED, OK, PENDING, RUNNING, SKIPPED, paper_key
 
-STATUSES = {"pending", "running", "ok", "empty", "failed", "skipped"}
+STATUSES = {PENDING, RUNNING, OK, EMPTY, FAILED, SKIPPED}
 SOURCE_FORMATS = {"tar", "tar.gz", "gz", "tex", "pdf", "unknown"}
 MANIFEST_FIELDS = {
     "arxiv_id", "version", "versioned_id", "download_status", "extract_status",

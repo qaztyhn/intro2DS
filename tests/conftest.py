@@ -3,9 +3,9 @@
 import pytest
 
 from src.downloader.http import make_manifest
-from src.extract import extract_version
+from src.stages.extract import extract_version
 from src.schema import paper_directory
-from src.storage import save_manifest, save_metadata, save_references
+from src.stages.storage import save_manifest, save_metadata, save_references
 
 
 @pytest.fixture

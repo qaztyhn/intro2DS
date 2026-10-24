@@ -24,9 +24,9 @@ from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .downloader.http import download_paper
-from .extract import extract_paper
-from .references import crawl_references
-from .storage import store_paper
+from .stages.extract import extract_paper
+from .stages.references import crawl_references
+from .stages.storage import store_paper
 from . import metrics
 
 PAPER_STAGES = ( "extract", "references", "storage")

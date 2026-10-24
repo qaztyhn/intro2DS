@@ -1,4 +1,8 @@
-"""Helpers shared by the baseline modules (discovery, download).
+"""Helpers shared across the pipeline (discovery, download, stages, tools).
+
+Contents: status constants, paper-id helpers, atomic JSON read/write, the run-level
+EventLogger (events.jsonl) and Stopwatch. Per-operation timing and resource metrics are
+a separate EventLogger in metrics.py (metrics_events.jsonl).
 
 Status vocabulary follows section 4 of Intro2DS_Project.md; error codes live in utils/errors.py.
 """
@@ -82,8 +86,10 @@ def read_json(path: pathlib.Path) -> Optional[Dict[str, Any]]:
 
 
 class EventLogger:
-    """Append-only events.jsonl for one run. One line per event."""
+    """Append-only events.jsonl for one run. One line per event.
 
+    Not the same class as metrics.EventLogger, which writes metrics_events.jsonl.
+    """
     def __init__(self, path: pathlib.Path, run_id: str):
         self.path = pathlib.Path(path)
         self.run_id = run_id

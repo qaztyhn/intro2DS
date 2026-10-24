@@ -22,13 +22,22 @@ The crawler supports:
 
 ## Project Structure
 
+## Project Structure
+
+- `src/main.py`: Pipeline orchestration
+- `src/config.py`: Load and validate the run config
+- `src/common.py`: Shared helpers (status constants, paper IDs, JSON I/O, run event log)
+- `src/schema.py`: Manifest fields and path/ID validation
+- `src/metrics.py`: Performance monitoring
 - `src/discovery/`: Paper metadata and version discovery
 - `src/downloader/`: Source downloading
-- `src/extract.py`: Source extraction
-- `src/references.py`: Reference metadata collection
-- `src/storage.py`: Data storage
-- `src/metrics.py`: Performance monitoring
-- `src/main.py`: Pipeline orchestration
+- `src/stages/`: Pipeline stages after download
+  - `extract.py`: Source extraction
+  - `references.py`: Reference metadata collection
+  - `storage.py`: Data storage
+  - `validation.py`: Data validation (used by storage)
+- `src/utils/`: HTTP helpers (throttling, retries) and error codes
+- `src/tools/`: Standalone scripts that `src.main` does not run (`benchmark.py`, `demo_m1.py`, `prepare_pilot_references.py`)
 
 ## Installation
 
@@ -65,9 +74,9 @@ Each paper ends with one `paper` event (status, total seconds). One failing pape
 
 | Module | Function | Called as |
 |---|---|---|
-| `src/extract.py` | `extract_paper` | called from `make_extract_hook` in `src/main.py` as `extract_paper(cfg, arxiv_id, logger, metrics_logger=None)`; one measured `extract` operation per version |
-| `src/references.py` | `crawl_references` | called from `make_references_hook` in `src/main.py`; writes `<run_dir>/papers/<paper_key>/references.json` |
-| `src/storage.py` | `store_paper` | called from `make_storage_hook` in `src/main.py` as `store_paper(cfg, arxiv_id, logger)`; validates the paper and writes `validation.json` |
+| `src/stages/extract.py` | `extract_paper` | called from `make_extract_hook` in `src/main.py` as `extract_paper(cfg, arxiv_id, logger, metrics_logger=None)`; one measured `extract` operation per version |
+| `src/stages/references.py` | `crawl_references` | called from `make_references_hook` in `src/main.py`; writes `<run_dir>/papers/<paper_key>/references.json` |
+| `src/stages/storage.py` | `store_paper` | called from `make_storage_hook` in `src/main.py` as `store_paper(cfg, arxiv_id, logger)`; validates the paper and writes `validation.json` |
 | `src/metrics.py` | `ResourceMonitor` | used directly in `src.main` to sample RAM and disk; its logs go to `metrics_events.jsonl` |
 
 Rules for hooks: idempotent (skip work already done on resume), log with `logger.log(stage, status, arxiv_id=..., ...)`,
