@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "seed": 42,
+  "month_last_ids": {
+  "2025-07": 23787
+  },
+  "month_boundary_provenance": {
+  "2025-07": {
+    "method": "inferred_from_assignment",
+    "assigned_range_id": "R4",
+    "assigned_count": 5000,
+    "note": "Derived from inclusive R4 bounds and exact assigned ID count; sampled IDs require metadata verification."
+    }
+},
+  "bounds_inclusive": true,
+  "benchmark_size": 1000,
+  "pilot_size": 40,
+  "ranges": [
+    {
+      "range_id": "R1",
+      "start_month": "2025-05",
+      "start_id": 15666,
+      "end_month": "2025-05",
+      "end_id": 20665,
+      "sample_size": 250
+    },
+    {
+      "range_id": "R2",
+      "start_month": "2025-07",
+      "start_id": 11659,
+      "end_month": "2025-07",
+      "end_id": 16658,
+      "sample_size": 250
+    },
+    {
+      "range_id": "R3",
+      "start_month": "2025-07",
+      "start_id": 1659,
+      "end_month": "2025-07",
+      "end_id": 6658,
+      "sample_size": 250
+    },
+    {
+      "range_id": "R4",
+      "start_month": "2025-07",
+      "start_id": 21659,
+      "end_month": "2025-08",
+      "end_id": 2871,
+      "sample_size": 250
+    }
+  ]
+}

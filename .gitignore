@@ -21,3 +21,15 @@ temp/
 .ipynb_checkpoints/
 
 
+
+# OS / editor
+.DS_Store
+*.tmp
+*.part
+
+# local test configs
+configs/test*.yaml
+configs/ids_err.txt
+
+configs/test_ids*.txt
+configs/test_*.yaml
