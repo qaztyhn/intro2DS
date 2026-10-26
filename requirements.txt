@@ -1,2 +1,3 @@
 -r src/requirements.txt
 certifi==2026.10.19
+kagglehub==1.0.3
