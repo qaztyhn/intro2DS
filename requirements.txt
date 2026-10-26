@@ -1,1 +1,2 @@
-requests>=2.27,<3
+-r src/requirements.txt
+certifi==2026.10.19
