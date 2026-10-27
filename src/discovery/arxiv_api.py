@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 import arxiv
 import requests
 
+from .. import metrics
 from ..utils.common import (
     FAILED,
     OK,
