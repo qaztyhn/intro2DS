@@ -15,7 +15,7 @@ Dates of versions 2..N ("revised_dates"):
     status "ok" (the version list is known, so download can proceed) and the reason is
     logged in events.jsonl as a warning.
 """
-
+import contextlib
 import pathlib
 import re
 from datetime import timezone
@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 import arxiv
 import requests
 
+from .. import metrics
 from ..common import (
     FAILED,
     OK,
@@ -218,6 +219,7 @@ def discover_paper(
     opts: Dict[str, Any],
     throttle: Throttle,
     logger: EventLogger,
+    metrics_logger: Optional[metrics.EventLogger] = None,
 ) -> str:
     """Discover one paper. Returns OK, FAILED or SKIPPED. Never raises for a bad paper."""
     path = paper_dir(cfg, arxiv_id) / "metadata.json"
@@ -233,8 +235,15 @@ def discover_paper(
 
     watch = Stopwatch()
     record = make_record(arxiv_id)
+    stage_cm = contextlib.nullcontext()
+    paper_opts = opts
+    if metrics_logger is not None:
+        stage_cm = metrics.measure_stage(metrics_logger, STAGE, arxiv_id=arxiv_id)
+        # a paper amkes at most one abs-page request, so one hook per paper = one per request
+        paper_opts = {**opts, "on_attempt": metrics.make_request_hook(metrics_logger, STAGE, arxiv_id=arxiv_id)}
     try:
-        warning = discover_one(arxiv_id, client, opts, throttle, record)
+        with stage_cm:
+            warning = discover_one(arxiv_id, client, paper_opts, throttle, record)
     except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
         error = _classify_arxiv_error(exc)
         record["status"] = FAILED
@@ -260,7 +269,7 @@ def discover_paper(
     return status
 
 
-def run_discovery(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> Dict[str, int]:
+def run_discovery(cfg: Dict[str, Any], logger: Optional[EventLogger] = None, metrics_logger: Optional[metrics.EventLogger] = None) -> Dict[str, int]:
     """Discover every id in ``ids_file``. Returns counts per status."""
     run_dir = cfg["output_root"] / cfg["run_id"]
     if logger is None:
@@ -269,7 +278,7 @@ def run_discovery(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> 
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        counts[discover_paper(cfg, arxiv_id, client, opts, throttle, logger)] += 1
+        counts[discover_paper(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)] += 1
     return counts
 
 
