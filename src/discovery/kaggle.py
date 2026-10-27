@@ -35,6 +35,11 @@ def download_kaggle_metadata():
         path=SNAPSHOT_NAME,
         output_dir=str(RAW_DIR),
     ))
+
+    # A download that produced no file or an empty file is unusable.
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"Invalid Kaggle snapshot: {path}")
+    
     return path
 
 
@@ -115,6 +120,10 @@ def normalize_kaggle_record(raw):
     if sorted(version_dates) != versions:
         raise ValueError("Missing versions")
 
+    # The submission date (v1) is required; revision dates may stay unknown.
+    if version_dates[1] is None:
+        raise ValueError("Invalid submission date")
+    
     # Collect revision dates in version order; v1 is the submission date.
     revised_dates = [version_dates[v] for v in versions[1:]]
 
@@ -127,7 +136,7 @@ def normalize_kaggle_record(raw):
     for author in raw.get("authors_parsed") or []:
         if not isinstance(author, (list, tuple)):
             continue
-        last, first, suffix = (list(author) + ["", ""])[:3]
+        last, first, suffix = (list(author) + ["", "", ""])[:3]
 
         name = " ".join(
             str(p).strip()
@@ -185,7 +194,7 @@ def discover_paper(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger
     path = paper_dir(cfg, arxiv_id) / "metadata.json"
     existing = read_json(path)
     # Reuse successful metadata when revision dates are present or unnecessary.
-    if existing and existing.get("status") == OK:
+    if (existing and existing.get("status") == OK and existing.get("revised_dates") is not None):
         logger.log(
             STAGE, SKIPPED,
             arxiv_id=arxiv_id,
