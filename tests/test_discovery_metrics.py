@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src import metrics
-from src.common import EventLogger, read_json
+from src.utils.common import EventLogger, read_json
 from src.discovery import arxiv_api as discovery
 from src.utils.errors import HTTP_5XX, NETWORK_ERROR, CrawlError
 
