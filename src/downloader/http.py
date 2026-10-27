@@ -9,10 +9,12 @@ This module only downloads and detects the format; extract_status / parse_status
 stay "pending" for the extraction module.
 """
 
+import contextlib
 import gzip
 import pathlib
-from typing import Any, Dict, Optional
 
+from typing import Any, Dict, Optional
+from .. import metrics
 from ..common import (
     FAILED,
     OK,
@@ -107,7 +109,7 @@ def download_version(
 
 
 def download_paper(
-    cfg: Dict[str, Any], arxiv_id: str, opts: Dict[str, Any], logger: EventLogger
+    cfg: Dict[str, Any], arxiv_id: str, opts: Dict[str, Any], logger: EventLogger, metrics_logger: Optional[metrics.EventLogger] = None
 ) -> Dict[str, int]:
     """Download every version of one paper. Returns counts per status (one per version)."""
     run_dir = cfg["output_root"] / cfg["run_id"]
@@ -129,8 +131,20 @@ def download_paper(
             continue
 
         watch = Stopwatch()
+        stage_cm = contextlib.nullcontext()
+        version_opts = opts
+        if metrics_logger is not None: 
+            stage_cm = metrics.measure_stage(metrics_logger, STAGE, arxiv_id=arxiv_id, version=version)
+            # one hook per logical request (= one version), created before its retry loop
+            version_opts = {
+                **opts, 
+                "on_attempt": metrics.make_request_hook(
+                    metrics_logger, STAGE, arxiv_id=arxiv_id, version=version
+                ),
+            }
         try:
-            manifest = download_version(cfg, opts, arxiv_id, version)
+            with stage_cm:
+                manifest = download_version(cfg, version_opts, arxiv_id, version)
         except Exception as exc:  # noqa: BLE001 - one version must never stop the run
             error = exc if isinstance(exc, CrawlError) else CrawlError(repr(exc), INVALID_RESPONSE)
             if not isinstance(exc, CrawlError):  # unexpected bug: still leave a manifest behind
@@ -152,7 +166,7 @@ def download_paper(
     return counts
 
 
-def run_download(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> Dict[str, int]:
+def run_download(cfg: Dict[str, Any], logger: Optional[EventLogger] = None, metrics_logger: Optional[metrics.EventLogger] = None) -> Dict[str, int]:
     """Download every version of every paper whose discovery status is ok."""
     run_dir = cfg["output_root"] / cfg["run_id"]
     if logger is None:
@@ -162,7 +176,7 @@ def run_download(cfg: Dict[str, Any], logger: Optional[EventLogger] = None) -> D
 
     totals = {OK: 0, FAILED: 0, SKIPPED: 0}
     for arxiv_id in load_ids(cfg["ids_file"]):
-        for status, n in download_paper(cfg, arxiv_id, opts, logger).items():
+        for status, n in download_paper(cfg, arxiv_id, opts, logger, metrics_logger).items():
             totals[status] += n
     return totals
 

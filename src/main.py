@@ -5,6 +5,8 @@ Papers are processed one at a time:
 and each paper ends with one "paper" event holding its total processing time.
 A failing paper is logged and the run continues with the next one.
 
+discovery and download are timed inside their own modules: process_paper() hands them the
+metrics_logger, and they measure each paper (discovery) or each version (download).
 extract, references and storage are wired in directly through make_extract_hook(),
 make_references_hook() and make_storage_hook(); each one is timed with metrics.measure_stage and
 written to metrics_events.jsonl. metrics.ResourceMonitor wraps the whole paper loop in main().
@@ -124,15 +126,15 @@ def load_paper_hooks(logger, metrics_logger):
     }
     return [(stage, factories[stage](metrics_logger)) for stage in PAPER_STAGES]
 
-def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
-    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, logger)
+    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, opts, logger)
+        counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
         for stage, func in hooks:
             stage_watch = Stopwatch()
             try:
@@ -179,7 +181,7 @@ def main() -> None:
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
         with metrics.ResourceMonitor(run_dir) as monitor:
             for index, arxiv_id in enumerate(ids, start=1):
-                paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger)
+                paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger)
                 counts[paper_status] += 1
                 print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
             print("papers:", counts)
