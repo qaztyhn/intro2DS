@@ -1,4 +1,4 @@
-"""Baseline (B) pipeline driver. One run = one run_id = one events.jsonl.
+"""B/D1 pipeline driver. One run = one run_id = one events.jsonl.
 
 Papers are processed one at a time:
     discovery -> download (every version) -> extract -> references -> storage
@@ -25,6 +25,7 @@ from importlib import metadata
 from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
+from .discovery.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
 from .stages.references import crawl_references
@@ -129,7 +130,9 @@ def load_paper_hooks(logger, metrics_logger):
 def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
-    d_status = discover_paper(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
+    # Keep the baseline symbol patchable for existing callers and offline tests.
+    discover = d1_discover_paper if cfg.get("config_name", "B") == "D1" else discover_paper
+    d_status = discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False

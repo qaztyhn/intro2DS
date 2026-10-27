@@ -1,0 +1,12 @@
+# A fixed run_id lets the same command resume without downloading valid metadata again.
+run_id: "D1_pilot_run01"
+config_name: "D1"
+schema_version: 1
+ids_file: "configs/d1_pilot_ids.txt"
+output_root: "experiments"
+arxiv_delay_seconds: 3
+# Use the team's existing contact and the same HTTP settings as baseline B.
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
+timeout: 30
+max_retries: 3
+backoff_base_seconds: 2
