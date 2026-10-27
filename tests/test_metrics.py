@@ -173,6 +173,37 @@ def test_directory_size_includes_nested_files(tmp_path):
     assert directory_size_bytes(tmp_path) == 8
 
 
+def test_directory_size_ignores_disappearing_directory(tmp_path, monkeypatch):
+    (tmp_path / "main.tex").write_bytes(b"abc")
+    (tmp_path / "remaining.bib").write_bytes(b"hello")
+
+    def fake_walk(root, *, followlinks, onerror):
+        assert root == tmp_path
+        assert followlinks is False
+        yield root, [], ["main.tex"]
+        onerror(FileNotFoundError(2, "No such file or directory", str(root / ".extract-gone")))
+        yield root, [], ["remaining.bib"]
+
+    monkeypatch.setattr(metrics.os, "walk", fake_walk)
+
+    assert directory_size_bytes(tmp_path) == 8
+
+
+def test_directory_size_propagates_walk_permission_error(tmp_path, monkeypatch):
+    error = PermissionError(13, "Permission denied", str(tmp_path / "restricted"))
+
+    def fake_walk(root, *, followlinks, onerror):
+        onerror(error)
+        return iter(())
+
+    monkeypatch.setattr(metrics.os, "walk", fake_walk)
+
+    with pytest.raises(PermissionError) as caught:
+        directory_size_bytes(tmp_path)
+
+    assert caught.value is error
+
+
 def test_directory_size_accepts_string_path(tmp_path):
     (tmp_path / "sample.bin").write_bytes(b"1234")
 

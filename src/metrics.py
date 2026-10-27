@@ -95,7 +95,9 @@ def directory_size_bytes(directory: str | Path) -> int:
     total = 0
 
     def raise_walk_error(error):
-        raise error
+        # Temporary directories may disappear between discovery and scanning.
+        if not isinstance(error, FileNotFoundError):
+            raise error
 
     for current, directories, files in os.walk(
         root,
