@@ -14,7 +14,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from .utils.errors import INVALID_RESPONSE, CrawlError
+from .errors import INVALID_RESPONSE, CrawlError
 
 # --- status vocabulary -------------------------------------------------------
 PENDING = "pending"

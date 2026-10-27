@@ -50,7 +50,7 @@ class Throttle:
 
 
 ARXIV = Throttle(3.0)
-S2 = Throttle(1.0)  # Adjust the interval to match the caller's API rate limit.
+S2 = Throttle(1.0 if os.getenv("S2_API_KEY") else 3.0)
 
 
 def get_retry_delay(response, attempt, base_delay=1.0):

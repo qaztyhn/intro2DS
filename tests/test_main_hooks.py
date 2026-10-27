@@ -3,7 +3,7 @@
 import pytest
 
 from src import main, metrics
-from src.common import EventLogger
+from src.utils.common import EventLogger
 from src.utils.errors import CrawlError
 
 
