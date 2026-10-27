@@ -9,7 +9,7 @@ import tarfile
 import pytest
 
 from src import metrics
-from src.common import EventLogger, read_json, write_json_atomic
+from src.utils.common import EventLogger, read_json, write_json_atomic
 from src.downloader import http as downloader
 from src.utils.errors import NOT_FOUND, CrawlError
 
