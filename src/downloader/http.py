@@ -12,7 +12,9 @@ stay "pending" for the extraction module.
 import contextlib
 import gzip
 import pathlib
+from typing import Any, Dict, Optional
 
+from .. import metrics
 from ..utils.common import (
     FAILED,
     OK,
