@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 import arxiv
 import requests
 
-from ..common import (
+from ..utils.common import (
     FAILED,
     OK,
     SKIPPED,

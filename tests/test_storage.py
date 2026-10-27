@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from src import common
+from src.utils import common
 from src.stages import storage
 from src.downloader.http import make_manifest
 

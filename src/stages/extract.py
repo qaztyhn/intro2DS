@@ -13,7 +13,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 
-from ..common import (EMPTY, FAILED, OK, SKIPPED, Stopwatch, read_json, write_json_atomic)
+from ..utils.common import (EMPTY, FAILED, OK, SKIPPED, Stopwatch, read_json, write_json_atomic)
 from ..schema import (NO_TEX_SOURCE, no_symlinks, paper_directory, relative_path, require_version, safe_path)
 from ..utils.errors import (CORRUPT_SOURCE, INVALID_RESPONSE, NOT_FOUND, UNSUPPORTED_FORMAT, CrawlError)
 from ..metrics import measure_stage

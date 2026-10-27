@@ -6,7 +6,7 @@ import tarfile
 
 import pytest
 
-from src.common import EventLogger, read_json, write_json_atomic
+from src.utils.common import EventLogger, read_json, write_json_atomic
 from src.downloader.http import make_manifest
 from src.stages.extract import ExtractionLimits, extract_paper, extract_source, extract_version
 from src.schema import paper_directory

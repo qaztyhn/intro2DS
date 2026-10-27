@@ -3,7 +3,7 @@
 import pathlib
 import re
 
-from .common import EMPTY, FAILED, OK, PENDING, RUNNING, SKIPPED, paper_key
+from .utils.common import EMPTY, FAILED, OK, PENDING, RUNNING, SKIPPED, paper_key
 
 STATUSES = {PENDING, RUNNING, OK, EMPTY, FAILED, SKIPPED}
 SOURCE_FORMATS = {"tar", "tar.gz", "gz", "tex", "pdf", "unknown"}

@@ -6,7 +6,7 @@ downloader's manifest and discovery's metadata remain the canonical records.
 
 import json
 
-from ..common import EMPTY, OK, Stopwatch, write_json_atomic
+from ..utils.common import EMPTY, OK, Stopwatch, write_json_atomic
 from ..schema import (MANIFEST_FIELDS, REFERENCE_FIELDS, STATUSES, paper_directory,
                      require_version, safe_path)
 
