@@ -10,7 +10,7 @@ from .. import metrics
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from ..stages.validation import validate_metadata
-from ..common import (
+from ..utils.common import (
     FAILED, OK, SKIPPED,
     Stopwatch, load_ids, paper_key,
     read_json, write_json_atomic,

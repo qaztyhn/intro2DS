@@ -20,7 +20,7 @@ import platform
 import sys
 from importlib import metadata
 
-from .common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
+from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .downloader.http import download_paper
