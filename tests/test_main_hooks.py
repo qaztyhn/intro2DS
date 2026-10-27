@@ -26,3 +26,28 @@ def test_storage_hook_is_measured_even_when_validation_fails(tmp_path):
     assert len(finished) == 1
     assert finished[0]["status"] == "failed"
     assert finished[0]["arxiv_id"] == "2507.01659"
+
+
+
+def test_process_paper_passes_metrics_logger_to_discovery_and_download(tmp_path, monkeypatch):
+    cfg = {"output_root": tmp_path, "run_id": "offline"}
+    logger = EventLogger(tmp_path / "events.jsonl", "offline")
+    metrics_logger = metrics.EventLogger(tmp_path / "metrics_events.jsonl", "offline")
+    received = {}
+
+    def fake_discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger=None):
+        received["discovery"] = metrics_logger
+        return "ok"
+
+    def fake_download(cfg, arxiv_id, opts, logger, metrics_logger=None):
+        received["download"] = metrics_logger
+        return {"ok": 1, "failed": 0, "skipped": 0}
+
+    monkeypatch.setattr(main, "discover_paper", fake_discover)
+    monkeypatch.setattr(main, "download_paper", fake_download)
+
+    status = main.process_paper(cfg, "2507.01659", None, {}, None, [], logger, metrics_logger)
+
+    assert status == "ok"
+    assert received["discovery"] is metrics_logger
+    assert received["download"] is metrics_logger
