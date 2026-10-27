@@ -9,7 +9,7 @@ import io
 import pathlib
 import tarfile
 
-from ..common import EventLogger, read_json, write_json_atomic
+from ..utils.common import EventLogger, read_json, write_json_atomic
 from ..downloader.http import make_manifest
 from ..stages.extract import extract_paper
 from ..schema import no_symlinks, paper_directory
