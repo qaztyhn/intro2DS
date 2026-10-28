@@ -5,11 +5,13 @@ import os
 import pathlib
 import platform
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from importlib import metadata
 
 from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
+from .discovery.batch import discover_batches
 from .discovery.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
@@ -114,29 +116,58 @@ def load_paper_hooks(logger, metrics_logger):
     }
     return [(stage, factories[stage](metrics_logger)) for stage in PAPER_STAGES]
 
-def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None, discovery_status=None) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
     # Keep the baseline symbol patchable for existing callers and offline tests.
     discover = d1_discover_paper if cfg.get("config_name", "B") == "D1" else discover_paper
-    d_status = discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
+    d_status = (discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
+                if discovery_status is None else discovery_status)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     stage_errors = []
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
-        for stage, func in hooks:
+        def run_stage(stage, func):
             stage_watch = Stopwatch()
             try:
                 func(cfg, arxiv_id, logger)
-            except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
-                stage_failed = True
-                stage_errors.append(type(exc).__name__)
+                return None
+            except Exception as exc:  # one stage must not stop the remaining stages
                 logger.log(
                     stage, FAILED, arxiv_id=arxiv_id, error_code=type(exc).__name__,
                     message=str(exc)[:300], elapsed_seconds=stage_watch.elapsed,
                 )
+                return type(exc).__name__
+
+        stage_map = dict(hooks)
+        if cfg.get("config_name") == "A_BATCH":
+            # References needs only the base paper ID. arXiv source requests
+            # remain sequential and share their existing throttle.
+            # The executor always joins before storage/validation.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                ref_future = (pool.submit(run_stage, "references", stage_map["references"])
+                              if "references" in stage_map else None)
+                counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
+                if "extract" in stage_map:
+                    error = run_stage("extract", stage_map["extract"])
+                    if error:
+                        stage_errors.append(error)
+                if ref_future is not None:
+                    error = ref_future.result()
+                    if error:
+                        stage_errors.append(error)
+            if "storage" in stage_map:
+                error = run_stage("storage", stage_map["storage"])
+                if error:
+                    stage_errors.append(error)
+        else:
+            counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
+            for stage, func in hooks:
+                error = run_stage(stage, func)
+                if error:
+                    stage_errors.append(error)
+        stage_failed = bool(stage_errors)
 
     if d_status == FAILED or counts[FAILED] or stage_failed:
         status = FAILED
@@ -192,8 +223,17 @@ def main() -> None:
         ids = record["input_ids"]
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
         with metrics.ResourceMonitor(run_dir) as monitor:
+            discovery_statuses = (
+                discover_batches(
+                    cfg, ids, client, opts, throttle, logger, metrics_logger,
+                    batch_size=cfg.get("discovery_batch_size", 20),
+                ) if cfg.get("config_name") == "A_BATCH" else None
+            )
             for index, arxiv_id in enumerate(ids, start=1):
-                paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger)
+                paper_status = process_paper(
+                    cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger,
+                    discovery_status=(discovery_statuses[arxiv_id] if discovery_statuses is not None else None),
+                )
                 counts[paper_status] += 1
                 print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
             print("papers:", counts)
