@@ -1,0 +1,12 @@
+run_id: "B_seq_smoke_{timestamp}"
+config_name: "B"
+schema_version: 1
+ids_file: "configs/ids.txt"
+output_root: "experiments"
+arxiv_delay_seconds: 3
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
+timeout: 30
+max_retries: 3
+s2_max_retries: 3
+s2_backoff_base_seconds: 5
+max_workers: 1
