@@ -1,0 +1,12 @@
+# Configuration for the baseline (B) run.
+run_id: "B_full_24120046"
+config_name: "B"
+schema_version: 1
+ids_file: "configs/team/ids_24120046.txt"  # one base arXiv id per line; blank lines and '#' lines ignored
+output_root: "experiments"   # results go to <output_root>/<run_id>/
+arxiv_delay_seconds: 3       # pause between arXiv API calls and between /src/ downloads
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120046@student.hcmus.edu.vn)"
+timeout: 30                  # seconds, per HTTP request
+max_retries: 3               # retries after the first attempt
+s2_max_retries: 3
+s2_backoff_base_seconds: 5
