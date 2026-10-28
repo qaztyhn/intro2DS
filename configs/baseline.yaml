@@ -1,10 +1,4 @@
 # Configuration for the baseline (B) run.
-# Every setting is read from this file.
-#
-# run_id: "auto" or a string containing "{timestamp}" is replaced by the UTC time
-#         at start-up (e.g. B_{timestamp} -> B_20261017T140000Z).
-#         A fixed value (e.g. B_run01) lets you resume: papers/versions that are
-#         already "ok" are skipped, failed ones are retried.
 run_id: "B_{timestamp}"
 config_name: "B"
 schema_version: 1
@@ -14,3 +8,5 @@ arxiv_delay_seconds: 3       # pause between arXiv API calls and between /src/ d
 user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
 timeout: 30                  # seconds, per HTTP request
 max_retries: 3               # retries after the first attempt
+s2_max_retries: 3
+s2_backoff_base_seconds: 5

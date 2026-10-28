@@ -1,4 +1,4 @@
-# SMALL TEST SET: first 20 ids of the assigned range. Full range: configs/ids_full.txt
+# SMALL TEST SET: first 20 ids of range R3 (24120058). Full range: configs/team/ids_24120058.txt
 2507.01659
 2507.01660
 2507.01661
