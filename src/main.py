@@ -5,6 +5,8 @@ import os
 import pathlib
 import platform
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from importlib import metadata
 
@@ -159,6 +161,33 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
     )
     return status
 
+def run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger=None, max_workers=1):
+    """Process every id and return {OK, FAILED, SKIPPED} counts.
+
+    Up to ``max_workers`` papers run at once, but only one of them talks to arXiv
+    and only one to Semantic Scholar at any moment (the two locks).
+    """
+    if type(max_workers) is not int or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
+    counts = {OK: 0, FAILED: 0, SKIPPED: 0}
+    arxiv_lock, s2_lock = threading.Lock(), threading.Lock()
+    pool = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {
+            pool.submit(process_paper, cfg, arxiv_id, client, opts, throttle, hooks,
+                        logger, metrics_logger, arxiv_lock, s2_lock): arxiv_id
+            for arxiv_id in ids
+        }
+        for done, future in enumerate(as_completed(futures), start=1):
+            paper_status = future.result()   # an unexpected error is re-raised, as in the sequential loop
+            counts[paper_status] += 1
+            print(f"[{done}/{len(ids)}] {futures[future]}: {paper_status}")
+    except BaseException:
+        pool.shutdown(wait=True, cancel_futures=True)   # drop queued papers, let running ones finish
+        raise
+    pool.shutdown(wait=True)
+    return counts
+
 def root_error_code(cfg, arxiv_id, d_status, counts, stage_errors):
     """Root cause of a failed paper: discovery, then download/extract, then references.
 
@@ -196,12 +225,9 @@ def main() -> None:
         hooks = load_paper_hooks(logger, metrics_logger)
         client, opts, throttle = make_clients(cfg)  # one Throttle shared by discovery and download
         ids = record["input_ids"]
-        counts = {OK: 0, FAILED: 0, SKIPPED: 0}
         with metrics.ResourceMonitor(run_dir) as monitor:
-            for index, arxiv_id in enumerate(ids, start=1):
-                paper_status = process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger)
-                counts[paper_status] += 1
-                print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
+            counts = run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger,
+                                max_workers=cfg.get("max_workers", 1))
             print("papers:", counts)
     except KeyboardInterrupt:
         status = "interrupted"
