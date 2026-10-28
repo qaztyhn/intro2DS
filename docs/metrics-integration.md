@@ -70,6 +70,8 @@ Rules:
 - Confirmed absence of TeX: `empty` with `NO_TEX_SOURCE`.
 - Unsupported/corrupt sources must not be marked as confirmed no-TeX.
 - A valid empty reference response uses `empty` and `references=[]`.
+- `ok` with no normalized rows is also possible when a nonempty raw response
+  contains only unresolved cited papers; this does not establish raw emptiness.
 - Set `validation_status="ok"` only after actual validation.
 - Size fields are totals across all expected versions of the paper.
 - Set `size_measurement_complete=True` only when both size totals
@@ -114,6 +116,13 @@ hook(
 - Create a new hook for another logical request.
 - The hook generates a request_id, or accepts one explicitly.
 - Group attempts by (run_id, request_id), not by attempt number alone.
+- Metrics hooks expose `for_request()`. Shared HTTP helpers call it once before
+  the retry loop: each page/GET gets a new ID, retries keep it, and
+  `request_group_id` links the parent hook. Direct callbacks retain their supplied
+  ID. A/B's old common code still needs the reviewed patch; see
+  [pre-pilot review](metrics-pilot-readiness.md).
+- Total wire HTTP requests/retries/429 remain unknown when library attempts or
+  redirect hops are unobserved. Observed callback zero is not a total zero.
 
 ## Resource monitoring and report
 
@@ -129,8 +138,11 @@ hook(
 
 ## Current verification
 
-Synthetic unit and integration tests pass.
-Real crawler integration and Colab execution still require validation.
+See [metrics-comparison.md](metrics-comparison.md) for the output adapter,
+independent checkout runner, comparability rules and Colab execution cells.
+Local real smoke results and actual test outcomes are recorded in
+[metrics-verification.md](metrics-verification.md). Colab execution must still
+be verified in that runtime.
 
 Run tests from the repository root:
 

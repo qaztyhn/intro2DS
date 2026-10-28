@@ -1,0 +1,875 @@
+{
+  "report_schema_version": "2.0",
+  "synthetic": true,
+  "benchmark_valid": true,
+  "issues": [],
+  "runs": {
+    "B0": {
+      "report_schema_version": "2.0",
+      "run_id": "B0",
+      "variant": "B0",
+      "environment": {
+        "synthetic": true,
+        "python": "synthetic-interpreter",
+        "dependencies": {
+          "fixture": "1"
+        }
+      },
+      "papers": {
+        "input_paper_count": 2,
+        "discovery_ok_count": 2,
+        "source_complete_count": 2,
+        "references_ok_count": 2,
+        "schema_ok_count": 2,
+        "complete_paper_count": 2,
+        "incomplete_paper_count": 0,
+        "paper_completion_rate": 1.0
+      },
+      "versions": {
+        "input_paper_count": 2,
+        "unknown_versions_paper_count": 0,
+        "known_expected_version_count": 2,
+        "processed_version_count": 2,
+        "with_tex_version_count": 2,
+        "no_tex_version_count": 0,
+        "unresolved_version_count": 0,
+        "known_version_processing_coverage": 1.0,
+        "expected_version_count": 2,
+        "version_coverage": 1.0
+      },
+      "references": {
+        "input_paper_count": 2,
+        "reference_status_counts": {
+          "empty": 2,
+          "failed": 0,
+          "ok": 0,
+          "pending": 0,
+          "running": 0,
+          "skipped": 0
+        },
+        "reference_response_success_rate": 1.0,
+        "reference_empty_paper_count": 2,
+        "reference_count": 0,
+        "references_per_valid_response": 0.0,
+        "reference_with_arxiv_id_count": 0,
+        "reference_with_arxiv_id_rate": null
+      },
+      "source_sizes": {
+        "input_paper_count": 2,
+        "size_measured_paper_count": 2,
+        "size_unmeasured_paper_count": 0,
+        "source_bytes_before_total": 94,
+        "source_bytes_after_total": 94,
+        "source_bytes_before_mean": 47.0,
+        "source_bytes_after_mean": 47.0,
+        "source_reduction_rate": 0.0
+      },
+      "timing": {
+        "discovery": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "download": {
+          "run_id": "B0",
+          "stage": "download",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 12.0,
+          "duration_mean_s": 6.0,
+          "duration_min_s": 6.0,
+          "duration_max_s": 6.0,
+          "source": "metrics_events.jsonl"
+        },
+        "extract": {
+          "run_id": "B0",
+          "stage": "extract",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 12.0,
+          "duration_mean_s": 6.0,
+          "duration_min_s": 6.0,
+          "duration_max_s": 6.0,
+          "source": "metrics_events.jsonl"
+        },
+        "paper": {
+          "run_id": "B0",
+          "stage": "paper",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 12.0,
+          "duration_mean_s": 6.0,
+          "duration_min_s": 6.0,
+          "duration_max_s": 6.0,
+          "source": "metrics_events.jsonl"
+        },
+        "pipeline": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "references": {
+          "run_id": "B0",
+          "stage": "references",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 12.0,
+          "duration_mean_s": 6.0,
+          "duration_min_s": 6.0,
+          "duration_max_s": 6.0,
+          "source": "metrics_events.jsonl"
+        },
+        "storage": {
+          "run_id": "B0",
+          "stage": "storage",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 12.0,
+          "duration_mean_s": 6.0,
+          "duration_min_s": 6.0,
+          "duration_max_s": 6.0,
+          "source": "metrics_events.jsonl"
+        }
+      },
+      "requests": {
+        "observed_request_count": 1,
+        "observed_attempt_count": 3,
+        "observed_retry_attempt_count": 2,
+        "error_attempt_count": 2,
+        "error_code_counts": {
+          "HTTP_429": 2
+        },
+        "requests_with_missing_attempts": 0,
+        "attempt_duration_sum_s": 0.4,
+        "attempt_duration_mean_s": 0.13333333333333333
+      },
+      "resources": {
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192
+      },
+      "input_ids": [
+        "2507.01659",
+        "2507.01660"
+      ],
+      "run_directory": "synthetic/B0",
+      "run_status": "completed",
+      "cache_mode": "cold",
+      "synthetic": true,
+      "provenance": {
+        "revision": {
+          "branch": "synthetic/B0",
+          "commit": "synthetic-B0",
+          "dirty": false
+        },
+        "config": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "schema_version": 1,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "config_name": "B",
+          "max_workers": 1,
+          "discovery_batch_size": 1
+        },
+        "policy": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "s2_credentials_present": false,
+          "s2_min_interval_seconds": 3.0
+        },
+        "protocol": "external-process-wall-rss-tree-run-disk-v1",
+        "warm_seed": null,
+        "runner_status": "completed"
+      },
+      "performance": {
+        "wall_seconds": 12,
+        "wall_seconds_per_input_paper": 6.0,
+        "mean_paper_processing_seconds": 6.0,
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192,
+        "final_output_bytes": 1886
+      },
+      "paper_outputs": {
+        "2507.01659": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "79d3f48774c0db996fe2d0b3bff5cd4e20a500495b25c08365dbb792e448fb5a",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        },
+        "2507.01660": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "a26f40ec047f132e38b0264dc43ee652cec422bdd15c3606b3980e290c0d097e",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        }
+      },
+      "schema": {
+        "status_counts": {
+          "ok": 2
+        },
+        "status": "ok"
+      },
+      "reliability": {
+        "failed_paper_count": 0,
+        "unresolved_paper_count": 0,
+        "references_observed_success_count": 2,
+        "references_observed_terminal_count": 2,
+        "reference_retrieval_success_rate": 1.0,
+        "valid_reference_count": 0,
+        "observed_http_429_attempt_count": 2,
+        "observed_retry_count": 2,
+        "failed_outcomes_by_stage": null,
+        "failed_timed_operations_by_stage": {
+          "download": 0,
+          "extract": 0,
+          "paper": 0,
+          "references": 0,
+          "storage": 0
+        },
+        "request_errors_by_stage": {
+          "references": 2
+        },
+        "request_observation_scope": "partial: arxiv.Client internal attempts are not instrumented"
+      },
+      "warnings": []
+    },
+    "A": {
+      "report_schema_version": "2.0",
+      "run_id": "A",
+      "variant": "A",
+      "environment": {
+        "synthetic": true,
+        "python": "synthetic-interpreter",
+        "dependencies": {
+          "fixture": "1"
+        }
+      },
+      "papers": {
+        "input_paper_count": 2,
+        "discovery_ok_count": 2,
+        "source_complete_count": 2,
+        "references_ok_count": 2,
+        "schema_ok_count": 2,
+        "complete_paper_count": 2,
+        "incomplete_paper_count": 0,
+        "paper_completion_rate": 1.0
+      },
+      "versions": {
+        "input_paper_count": 2,
+        "unknown_versions_paper_count": 0,
+        "known_expected_version_count": 2,
+        "processed_version_count": 2,
+        "with_tex_version_count": 2,
+        "no_tex_version_count": 0,
+        "unresolved_version_count": 0,
+        "known_version_processing_coverage": 1.0,
+        "expected_version_count": 2,
+        "version_coverage": 1.0
+      },
+      "references": {
+        "input_paper_count": 2,
+        "reference_status_counts": {
+          "empty": 2,
+          "failed": 0,
+          "ok": 0,
+          "pending": 0,
+          "running": 0,
+          "skipped": 0
+        },
+        "reference_response_success_rate": 1.0,
+        "reference_empty_paper_count": 2,
+        "reference_count": 0,
+        "references_per_valid_response": 0.0,
+        "reference_with_arxiv_id_count": 0,
+        "reference_with_arxiv_id_rate": null
+      },
+      "source_sizes": {
+        "input_paper_count": 2,
+        "size_measured_paper_count": 2,
+        "size_unmeasured_paper_count": 0,
+        "source_bytes_before_total": 94,
+        "source_bytes_after_total": 94,
+        "source_bytes_before_mean": 47.0,
+        "source_bytes_after_mean": 47.0,
+        "source_reduction_rate": 0.0
+      },
+      "timing": {
+        "discovery": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "download": {
+          "run_id": "A",
+          "stage": "download",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 8.0,
+          "duration_mean_s": 4.0,
+          "duration_min_s": 4.0,
+          "duration_max_s": 4.0,
+          "source": "metrics_events.jsonl"
+        },
+        "extract": {
+          "run_id": "A",
+          "stage": "extract",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 8.0,
+          "duration_mean_s": 4.0,
+          "duration_min_s": 4.0,
+          "duration_max_s": 4.0,
+          "source": "metrics_events.jsonl"
+        },
+        "paper": {
+          "run_id": "A",
+          "stage": "paper",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 8.0,
+          "duration_mean_s": 4.0,
+          "duration_min_s": 4.0,
+          "duration_max_s": 4.0,
+          "source": "metrics_events.jsonl"
+        },
+        "pipeline": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "references": {
+          "run_id": "A",
+          "stage": "references",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 8.0,
+          "duration_mean_s": 4.0,
+          "duration_min_s": 4.0,
+          "duration_max_s": 4.0,
+          "source": "metrics_events.jsonl"
+        },
+        "storage": {
+          "run_id": "A",
+          "stage": "storage",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 8.0,
+          "duration_mean_s": 4.0,
+          "duration_min_s": 4.0,
+          "duration_max_s": 4.0,
+          "source": "metrics_events.jsonl"
+        }
+      },
+      "requests": {
+        "observed_request_count": 1,
+        "observed_attempt_count": 3,
+        "observed_retry_attempt_count": 2,
+        "error_attempt_count": 2,
+        "error_code_counts": {
+          "HTTP_429": 2
+        },
+        "requests_with_missing_attempts": 0,
+        "attempt_duration_sum_s": 0.4,
+        "attempt_duration_mean_s": 0.13333333333333333
+      },
+      "resources": {
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192
+      },
+      "input_ids": [
+        "2507.01659",
+        "2507.01660"
+      ],
+      "run_directory": "synthetic/A",
+      "run_status": "completed",
+      "cache_mode": "cold",
+      "synthetic": true,
+      "provenance": {
+        "revision": {
+          "branch": "synthetic/A",
+          "commit": "synthetic-A",
+          "dirty": false
+        },
+        "config": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "schema_version": 1,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "config_name": "A_BATCH",
+          "max_workers": 1,
+          "discovery_batch_size": 20
+        },
+        "policy": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "s2_credentials_present": false,
+          "s2_min_interval_seconds": 3.0
+        },
+        "protocol": "external-process-wall-rss-tree-run-disk-v1",
+        "warm_seed": null,
+        "runner_status": "completed"
+      },
+      "performance": {
+        "wall_seconds": 8,
+        "wall_seconds_per_input_paper": 4.0,
+        "mean_paper_processing_seconds": 4.0,
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192,
+        "final_output_bytes": 1886
+      },
+      "paper_outputs": {
+        "2507.01659": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "79d3f48774c0db996fe2d0b3bff5cd4e20a500495b25c08365dbb792e448fb5a",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        },
+        "2507.01660": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "a26f40ec047f132e38b0264dc43ee652cec422bdd15c3606b3980e290c0d097e",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        }
+      },
+      "schema": {
+        "status_counts": {
+          "ok": 2
+        },
+        "status": "ok"
+      },
+      "reliability": {
+        "failed_paper_count": 0,
+        "unresolved_paper_count": 0,
+        "references_observed_success_count": 2,
+        "references_observed_terminal_count": 2,
+        "reference_retrieval_success_rate": 1.0,
+        "valid_reference_count": 0,
+        "observed_http_429_attempt_count": 2,
+        "observed_retry_count": 2,
+        "failed_outcomes_by_stage": null,
+        "failed_timed_operations_by_stage": {
+          "download": 0,
+          "extract": 0,
+          "paper": 0,
+          "references": 0,
+          "storage": 0
+        },
+        "request_errors_by_stage": {
+          "references": 2
+        },
+        "request_observation_scope": "partial: arxiv.Client internal attempts are not instrumented"
+      },
+      "warnings": []
+    },
+    "B": {
+      "report_schema_version": "2.0",
+      "run_id": "B",
+      "variant": "B",
+      "environment": {
+        "synthetic": true,
+        "python": "synthetic-interpreter",
+        "dependencies": {
+          "fixture": "1"
+        }
+      },
+      "papers": {
+        "input_paper_count": 2,
+        "discovery_ok_count": 2,
+        "source_complete_count": 2,
+        "references_ok_count": 2,
+        "schema_ok_count": 2,
+        "complete_paper_count": 2,
+        "incomplete_paper_count": 0,
+        "paper_completion_rate": 1.0
+      },
+      "versions": {
+        "input_paper_count": 2,
+        "unknown_versions_paper_count": 0,
+        "known_expected_version_count": 2,
+        "processed_version_count": 2,
+        "with_tex_version_count": 2,
+        "no_tex_version_count": 0,
+        "unresolved_version_count": 0,
+        "known_version_processing_coverage": 1.0,
+        "expected_version_count": 2,
+        "version_coverage": 1.0
+      },
+      "references": {
+        "input_paper_count": 2,
+        "reference_status_counts": {
+          "empty": 2,
+          "failed": 0,
+          "ok": 0,
+          "pending": 0,
+          "running": 0,
+          "skipped": 0
+        },
+        "reference_response_success_rate": 1.0,
+        "reference_empty_paper_count": 2,
+        "reference_count": 0,
+        "references_per_valid_response": 0.0,
+        "reference_with_arxiv_id_count": 0,
+        "reference_with_arxiv_id_rate": null
+      },
+      "source_sizes": {
+        "input_paper_count": 2,
+        "size_measured_paper_count": 2,
+        "size_unmeasured_paper_count": 0,
+        "source_bytes_before_total": 94,
+        "source_bytes_after_total": 94,
+        "source_bytes_before_mean": 47.0,
+        "source_bytes_after_mean": 47.0,
+        "source_reduction_rate": 0.0
+      },
+      "timing": {
+        "discovery": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "download": {
+          "run_id": "B",
+          "stage": "download",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 6.0,
+          "duration_mean_s": 3.0,
+          "duration_min_s": 3.0,
+          "duration_max_s": 3.0,
+          "source": "metrics_events.jsonl"
+        },
+        "extract": {
+          "run_id": "B",
+          "stage": "extract",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 6.0,
+          "duration_mean_s": 3.0,
+          "duration_min_s": 3.0,
+          "duration_max_s": 3.0,
+          "source": "metrics_events.jsonl"
+        },
+        "paper": {
+          "run_id": "B",
+          "stage": "paper",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 6.0,
+          "duration_mean_s": 3.0,
+          "duration_min_s": 3.0,
+          "duration_max_s": 3.0,
+          "source": "metrics_events.jsonl"
+        },
+        "pipeline": {
+          "duration_mean_s": null,
+          "duration_sum_s": null,
+          "finished_operation_count": 0,
+          "source": "events.jsonl"
+        },
+        "references": {
+          "run_id": "B",
+          "stage": "references",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 6.0,
+          "duration_mean_s": 3.0,
+          "duration_min_s": 3.0,
+          "duration_max_s": 3.0,
+          "source": "metrics_events.jsonl"
+        },
+        "storage": {
+          "run_id": "B",
+          "stage": "storage",
+          "started_operation_count": 2,
+          "finished_operation_count": 2,
+          "unfinished_operation_count": 0,
+          "successful_operation_count": 2,
+          "failed_operation_count": 0,
+          "duration_sum_s": 6.0,
+          "duration_mean_s": 3.0,
+          "duration_min_s": 3.0,
+          "duration_max_s": 3.0,
+          "source": "metrics_events.jsonl"
+        }
+      },
+      "requests": {
+        "observed_request_count": 1,
+        "observed_attempt_count": 3,
+        "observed_retry_attempt_count": 2,
+        "error_attempt_count": 2,
+        "error_code_counts": {
+          "HTTP_429": 2
+        },
+        "requests_with_missing_attempts": 0,
+        "attempt_duration_sum_s": 0.4,
+        "attempt_duration_mean_s": 0.13333333333333333
+      },
+      "resources": {
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192
+      },
+      "input_ids": [
+        "2507.01659",
+        "2507.01660"
+      ],
+      "run_directory": "synthetic/B",
+      "run_status": "completed",
+      "cache_mode": "cold",
+      "synthetic": true,
+      "provenance": {
+        "revision": {
+          "branch": "synthetic/B",
+          "commit": "synthetic-B",
+          "dirty": false
+        },
+        "config": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "schema_version": 1,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "config_name": "B",
+          "max_workers": 2,
+          "discovery_batch_size": 1
+        },
+        "policy": {
+          "timeout": 30,
+          "max_retries": 3,
+          "backoff_base_seconds": 2.0,
+          "arxiv_delay_seconds": 3,
+          "s2_max_retries": 3,
+          "s2_backoff_base_seconds": 5,
+          "user_agent": "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)",
+          "s2_credentials_present": false,
+          "s2_min_interval_seconds": 3.0
+        },
+        "protocol": "external-process-wall-rss-tree-run-disk-v1",
+        "warm_seed": null,
+        "runner_status": "completed"
+      },
+      "performance": {
+        "wall_seconds": 6,
+        "wall_seconds_per_input_paper": 3.0,
+        "mean_paper_processing_seconds": 3.0,
+        "rss_peak_bytes": 4096,
+        "rss_mean_bytes": 2048,
+        "disk_peak_bytes": 8192,
+        "final_output_bytes": 1886
+      },
+      "paper_outputs": {
+        "2507.01659": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "79d3f48774c0db996fe2d0b3bff5cd4e20a500495b25c08365dbb792e448fb5a",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        },
+        "2507.01660": {
+          "expected_versions": [
+            1
+          ],
+          "metadata_sha256": "a26f40ec047f132e38b0264dc43ee652cec422bdd15c3606b3980e290c0d097e",
+          "source_sha256": "79a8e084626c7b3b451b1003aba9ed249ad318ce3c4db4d0aff2b9c862cb3353",
+          "references_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "reference_count": 0,
+          "schema_status": "ok",
+          "schema_issue_counts": {
+            "VALID_EMPTY": 1
+          }
+        }
+      },
+      "schema": {
+        "status_counts": {
+          "ok": 2
+        },
+        "status": "ok"
+      },
+      "reliability": {
+        "failed_paper_count": 0,
+        "unresolved_paper_count": 0,
+        "references_observed_success_count": 2,
+        "references_observed_terminal_count": 2,
+        "reference_retrieval_success_rate": 1.0,
+        "valid_reference_count": 0,
+        "observed_http_429_attempt_count": 2,
+        "observed_retry_count": 2,
+        "failed_outcomes_by_stage": null,
+        "failed_timed_operations_by_stage": {
+          "download": 0,
+          "extract": 0,
+          "paper": 0,
+          "references": 0,
+          "storage": 0
+        },
+        "request_errors_by_stage": {
+          "references": 2
+        },
+        "request_observation_scope": "partial: arxiv.Client internal attempts are not instrumented"
+      },
+      "warnings": []
+    }
+  },
+  "comparisons": {
+    "A": {
+      "speedup_vs_B0": 1.5,
+      "diagnostic_wall_ratio": 1.5,
+      "paper_completion_rate_delta": 0.0,
+      "content": {
+        "expected_versions": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "metadata_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "source_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "references_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        }
+      }
+    },
+    "B": {
+      "speedup_vs_B0": 2.0,
+      "diagnostic_wall_ratio": 2.0,
+      "paper_completion_rate_delta": 0.0,
+      "content": {
+        "expected_versions": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "metadata_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "source_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        },
+        "references_sha256": {
+          "equal_paper_count": 2,
+          "changed_ids": [],
+          "unobserved_ids": []
+        }
+      }
+    }
+  },
+  "conclusion": "Conditions verified. Interpret speedups alongside completion and content differences."
+}
