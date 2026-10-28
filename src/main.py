@@ -5,6 +5,7 @@ import os
 import pathlib
 import platform
 import sys
+from contextlib import nullcontext
 from importlib import metadata
 
 from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
@@ -114,22 +115,27 @@ def load_paper_hooks(logger, metrics_logger):
     }
     return [(stage, factories[stage](metrics_logger)) for stage in PAPER_STAGES]
 
-def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None, arxiv_lock=None, s2_lock=None) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
     # Keep the baseline symbol patchable for existing callers and offline tests.
     discover = d1_discover_paper if cfg.get("config_name", "B") == "D1" else discover_paper
-    d_status = discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
     stage_errors = []
+    with (arxiv_lock if arxiv_lock is not None else nullcontext()):
+        d_status = discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
+        if d_status != FAILED:
+            counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
+
     if d_status != FAILED:
-        counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
         for stage, func in hooks:
             stage_watch = Stopwatch()
+            guard = (s2_lock if s2_lock is not None else nullcontext()) if stage == "references" else nullcontext()
             try:
-                func(cfg, arxiv_id, logger)
+                with guard:
+                    func(cfg, arxiv_id, logger)
             except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
                 stage_failed = True
                 stage_errors.append(type(exc).__name__)
