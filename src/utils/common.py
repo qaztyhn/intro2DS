@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -94,6 +95,7 @@ class EventLogger:
         self.path = pathlib.Path(path)
         self.run_id = run_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
 
     def log(
         self,
@@ -120,8 +122,10 @@ class EventLogger:
             "message": message,
             "elapsed_seconds": None if elapsed_seconds is None else round(elapsed_seconds, 3),
         }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        line = json.dumps(event, ensure_ascii=False) + "\n"
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
 
 
 class Stopwatch:
