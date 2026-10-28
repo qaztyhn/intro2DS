@@ -1,0 +1,13 @@
+# A + Batch: batched arXiv discovery, two independent per-paper lanes.
+run_id: "A_BATCH_{timestamp}"
+config_name: "A_BATCH"
+schema_version: 1
+ids_file: "configs/d1_pilot_ids.txt"
+output_root: "experiments"
+discovery_batch_size: 20
+arxiv_delay_seconds: 3
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
+timeout: 30
+max_retries: 3
+s2_max_retries: 3
+s2_backoff_base_seconds: 5
