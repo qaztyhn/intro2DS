@@ -960,7 +960,6 @@ def test_references_summary_rejects_unexpected_paper():
     "record",
     [
         {"status": "unknown"},
-        {"status": "ok", "references": []},
         {"status": "empty", "references": [{}]},
     ],
 )
@@ -2332,3 +2331,27 @@ def test_build_run_report_includes_request_summary():
     assert requests["error_attempt_count"] == 1
     assert requests["error_code_counts"] == {"HTTP_429": 1}
     assert requests["attempt_duration_sum_s"] == pytest.approx(0.6)
+
+
+def test_shared_summary_accepts_unresolved_reference_response():
+    value = metrics.summarize_references(["a"], {"a": {"status": "ok", "references": []}})
+    assert value["reference_response_success_rate"] == 1
+    assert value["reference_empty_paper_count"] == 0
+
+
+def test_stage_times_matches_finish_serialized_before_start():
+    events = [make_timed_event("concurrent", "finished", status="ok", duration_s=2.0),
+              make_timed_event("concurrent", "started")]
+    summary = summarize_stage_times(events, "run-01", "extract")
+    assert summary["finished_operation_count"] == 1
+    assert summary["unfinished_operation_count"] == 0
+    assert summary["duration_mean_s"] == 2.0
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_read_events_rejects_nonfinite_json_constants(tmp_path, constant):
+    path = tmp_path / "events.jsonl"
+    path.write_text('{"run_id":"run-01", "timestamp":"t", "stage":"resources", '
+                    '"event":"sample", "rss_bytes":' + constant + '}\n')
+    with pytest.raises(ValueError, match="Invalid JSON at line 1"):
+        read_events(path)

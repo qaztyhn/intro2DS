@@ -1,0 +1,83 @@
+--- a/src/metrics.py
++++ b/src/metrics.py
+@@ -806,13 +806,21 @@
+     arxiv_id: str | None = None,
+     version: int | None = None,
+     request_id: str | None = None,
++    request_group_id: str | None = None,
+ ):
+-    """Create a request-attempt callback with fixed context."""
++    """Create a callback with an explicit per-invocation request factory.
++
++    Shared HTTP helpers call ``for_request()`` once outside their retry loop.
++    Direct callback users retain the supplied request_id. A reused hook thus
++    groups pages by request_group_id without conflating their attempt numbers.
++    """
+     if request_id is None:
+         request_id = uuid4().hex
+
+     if not isinstance(request_id, str) or not request_id.strip():
+         raise ValueError("request_id must be a non-empty string")
++    if request_group_id is not None and (not isinstance(request_group_id, str) or not request_group_id.strip()):
++        raise ValueError("request_group_id must be a non-empty string or None")
+
+     def on_attempt(
+         *,
+@@ -843,7 +851,14 @@
+             duration_s=duration,
+             error_message=error_message,
+             request_id=request_id,
+-        )
++            **({"request_group_id": request_group_id} if request_group_id else {}),
++        )
++
++    def for_request():
++        return make_request_hook(logger, stage, arxiv_id=arxiv_id, version=version,
++                                 request_group_id=request_group_id or request_id)
++
++    on_attempt.for_request = for_request
+     return on_attempt
+
+ def collect_environment() -> dict:
+--- a/src/utils/http.py
++++ b/src/utils/http.py
+@@ -111,6 +111,23 @@
+         )
+     except Exception:
+         logger.exception("on_attempt hook failed")
++
++
++def _bind_request_hook(on_attempt):
++    """Opt-in factory: allocate once per logical request, never per retry.
++
++    Look only at explicitly attached attributes, so ordinary callbacks and
++    mocks with dynamic attribute access keep their existing callback contract.
++    Instrumentation failure must not send another HTTP request.
++    """
++    factory = getattr(on_attempt, "__dict__", {}).get("for_request")
++    if factory is None:
++        return on_attempt
++    try:
++        return factory()
++    except Exception:
++        logger.exception("on_attempt request factory failed")
++        return None
+
+
+ def request_with_retry(
+@@ -156,6 +173,7 @@
+         raise ValueError("base_delay must be finite and non-negative")
+
+     headers = {**DEFAULT_HEADERS, **(headers or {})}
++    on_attempt = _bind_request_hook(on_attempt)
+
+     for attempt in range(max_retries + 1):
+         if throttle is not None:
+@@ -315,6 +333,7 @@
+     destination.parent.mkdir(parents=True, exist_ok=True)
+
+     headers = {**DEFAULT_HEADERS, **(headers or {})}
++    on_attempt = _bind_request_hook(on_attempt)
+
+     for attempt in range(max_retries + 1):
+         response = None

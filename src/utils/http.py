@@ -113,6 +113,23 @@ def _emit(on_attempt, attempt, started, status=None, error_code=None, message=No
         logger.exception("on_attempt hook failed")
 
 
+def _bind_request_hook(on_attempt):
+    """Opt-in factory: allocate once per logical request, never per retry.
+
+    Look only at explicitly attached attributes, so ordinary callbacks and
+    mocks with dynamic attribute access keep their existing callback contract.
+    Instrumentation failure must not send another HTTP request.
+    """
+    factory = getattr(on_attempt, "__dict__", {}).get("for_request")
+    if factory is None:
+        return on_attempt
+    try:
+        return factory()
+    except Exception:
+        logger.exception("on_attempt request factory failed")
+        return None
+
+
 def request_with_retry(
     url,
     params=None,
@@ -156,6 +173,7 @@ def request_with_retry(
         raise ValueError("base_delay must be finite and non-negative")
 
     headers = {**DEFAULT_HEADERS, **(headers or {})}
+    on_attempt = _bind_request_hook(on_attempt)
 
     for attempt in range(max_retries + 1):
         if throttle is not None:
@@ -315,6 +333,7 @@ def download_file(
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     headers = {**DEFAULT_HEADERS, **(headers or {})}
+    on_attempt = _bind_request_hook(on_attempt)
 
     for attempt in range(max_retries + 1):
         response = None
