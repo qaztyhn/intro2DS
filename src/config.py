@@ -60,6 +60,15 @@ def load_config(path: Optional[pathlib.Path] = None) -> Dict[str, Any]:
     if not isinstance(cfg["max_retries"], int) or cfg["max_retries"] < 0:
         raise ConfigError("max_retries must be a non-negative integer")
 
+    if cfg.get("s2_max_retries") is not None and (
+            type(cfg["s2_max_retries"]) is not int or cfg["s2_max_retries"] < 0):
+        raise ConfigError("s2_max_retries must be a non-negative integer")
+    if cfg.get("s2_backoff_base_seconds") is not None and (
+            isinstance(cfg["s2_backoff_base_seconds"], bool)
+            or not isinstance(cfg["s2_backoff_base_seconds"], (int, float))
+            or cfg["s2_backoff_base_seconds"] < 0):
+        raise ConfigError("s2_backoff_base_seconds must be a non-negative number")
+    
     base = PROJECT_ROOT
     cfg["run_id"] = _resolve_run_id(cfg["run_id"])
     cfg["ids_file"] = (base / cfg["ids_file"]).resolve()

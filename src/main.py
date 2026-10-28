@@ -1,19 +1,4 @@
-"""B/D1 pipeline driver. One run = one run_id = one events.jsonl.
-
-Papers are processed one at a time:
-    discovery -> download (every version) -> extract -> references -> storage
-and each paper ends with one "paper" event holding its total processing time.
-A failing paper is logged and the run continues with the next one.
-
-discovery and download are timed inside their own modules: process_paper() hands them the
-metrics_logger, and they measure each paper (discovery) or each version (download).
-extract, references and storage are wired in directly through make_extract_hook(),
-make_references_hook() and make_storage_hook(); each one is timed with metrics.measure_stage and
-written to metrics_events.jsonl. metrics.ResourceMonitor wraps the whole paper loop in main().
-Contract: docs/handover-baseline-discovery-download.md
-
-    python -m src.main [path/to/config.yaml]
-"""
+"""B/D1 pipeline driver. One run = one run_id = one events.jsonl."""
 
 import importlib
 import os
@@ -69,10 +54,10 @@ def build_run_record(cfg, run_dir, input_ids):
     })
     return record
 
-def finish_run(run_dir, record, status, wall):
+def finish_run(run_dir, record, status, wall, elapsed=None):
     record["finished_at"] = utc_now_iso()
     record["run_status"] = status
-    record["wall_seconds"] = round(wall.elapsed, 3)
+    record["wall_seconds"] = round(wall.elapsed if elapsed is None else elapsed, 3)
     write_json_atomic(run_dir / "run.json", record)
 
 def make_references_hook(metrics_logger):
@@ -89,7 +74,9 @@ def make_references_hook(metrics_logger):
         watch = Stopwatch()
         on_attempt = metrics.make_request_hook(metrics_logger, "references", arxiv_id=arxiv_id)
         opts = http_options(cfg, None, on_attempt=on_attempt)
-        opts.pop("throttle")  # references.py already applies its own Semantic Scholar throttle (S2)
+        opts.pop("throttle")
+        opts["max_retries"] = cfg.get("s2_max_retries", opts["max_retries"])
+        opts["base_delay"] = cfg.get("s2_backoff_base_seconds", opts["base_delay"]) 
         with metrics.measure_stage(metrics_logger, "references", arxiv_id=arxiv_id):
             result = crawl_references(arxiv_id, **opts)
 
@@ -136,6 +123,7 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
 
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     stage_failed = False
+    stage_errors = []
     if d_status != FAILED:
         counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
         for stage, func in hooks:
@@ -144,6 +132,7 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
                 func(cfg, arxiv_id, logger)
             except Exception as exc:  # noqa: BLE001 - one paper must never stop the run
                 stage_failed = True
+                stage_errors.append(type(exc).__name__)
                 logger.log(
                     stage, FAILED, arxiv_id=arxiv_id, error_code=type(exc).__name__,
                     message=str(exc)[:300], elapsed_seconds=stage_watch.elapsed,
@@ -157,10 +146,30 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
         status = OK
     logger.log(
         "paper", status, arxiv_id=arxiv_id, elapsed_seconds=watch.elapsed,
+        error_code=(root_error_code(cfg, arxiv_id, d_status, counts, stage_errors)
+                    if status == FAILED else None),
         message=f"discovery={d_status} versions ok/failed/skipped="
                 f"{counts[OK]}/{counts[FAILED]}/{counts[SKIPPED]}",
     )
     return status
+
+def root_error_code(cfg, arxiv_id, d_status, counts, stage_errors):
+    """Root cause of a failed paper: discovery, then download/extract, then references.
+
+    Storage only reports SCHEMA_ERROR when an earlier stage left incomplete data,
+    so the paper event records the earlier stage's code instead (e.g. HTTP_429).
+    """
+    paper_dir = cfg["output_root"] / cfg["run_id"] / "papers" / paper_key(arxiv_id)
+    if d_status == FAILED:
+        return (read_json(paper_dir / "metadata.json") or {}).get("error_code")
+    for path in sorted((paper_dir / "versions").glob("v*/manifest.json")):
+        manifest = read_json(path) or {}
+        if FAILED in (manifest.get("download_status"), manifest.get("extract_status")) and manifest.get("error_code"):
+            return manifest["error_code"]
+    references = read_json(paper_dir / "references.json") or {}
+    if references.get("status") == FAILED and references.get("error_code"):
+        return references["error_code"]
+    return stage_errors[0] if stage_errors else None
 
 def main() -> None:
     cfg = load_config(pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None)
@@ -203,13 +212,14 @@ def main() -> None:
                    message=f"end, papers ok/failed/skipped={counts[OK]}/{counts[FAILED]}/{counts[SKIPPED]}")
         print(f"pipeline wall time: {wall.elapsed:.1f}s")
     finally:
+        elapsed = wall.elapsed
         if monitor is not None:
             try:
                 (run_dir / "papers").mkdir(parents=True, exist_ok=True)
                 metrics.log_resource_results(metrics_logger, monitor.sampler, run_dir / "papers")
             except Exception as exc:  
                 logger.log("metrics", FAILED, error_code=type(exc).__name__, message=str(exc)[:300])
-        finish_run(run_dir, record, status, wall)
+        finish_run(run_dir, record, status, wall, elapsed)
 
 if __name__ == "__main__":
     main()
