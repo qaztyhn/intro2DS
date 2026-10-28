@@ -1,3 +1,4 @@
+from threading import Lock
 """Helpers shared across the pipeline (discovery, download, stages, tools).
 
 Contents: status constants, paper-id helpers, atomic JSON read/write, the run-level
@@ -93,6 +94,7 @@ class EventLogger:
     def __init__(self, path: pathlib.Path, run_id: str):
         self.path = pathlib.Path(path)
         self.run_id = run_id
+        self._lock = Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def log(
@@ -120,8 +122,9 @@ class EventLogger:
             "message": message,
             "elapsed_seconds": None if elapsed_seconds is None else round(elapsed_seconds, 3),
         }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 class Stopwatch:
