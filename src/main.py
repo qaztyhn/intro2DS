@@ -12,7 +12,7 @@ from importlib import metadata
 
 from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
 from .config import http_options, load_config
-from .discovery.arxiv_api import discover_paper, make_clients
+from .discovery.arxiv_api import BatchPrefetcher, discover_paper, make_clients
 from .discovery.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
@@ -117,7 +117,7 @@ def load_paper_hooks(logger, metrics_logger):
     }
     return [(stage, factories[stage](metrics_logger)) for stage in PAPER_STAGES]
 
-def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None, arxiv_lock=None, s2_lock=None) -> str:
+def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger=None, arxiv_lock=None, s2_lock=None, prefetch=None) -> str:
     """Run the whole pipeline for one paper and log one 'paper' event with its total time."""
     watch = Stopwatch()
     # Keep the baseline symbol patchable for existing callers and offline tests.
@@ -127,6 +127,8 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
     stage_failed = False
     stage_errors = []
     with (arxiv_lock if arxiv_lock is not None else nullcontext()):
+        if prefetch is not None:
+            prefetch(arxiv_id)
         d_status = discover(cfg, arxiv_id, client, opts, throttle, logger, metrics_logger)
         if d_status != FAILED:
             counts = download_paper(cfg, arxiv_id, opts, logger, metrics_logger)
@@ -161,7 +163,7 @@ def process_paper(cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_
     )
     return status
 
-def run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger=None, max_workers=1):
+def run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger=None, max_workers=1, batch_size=1):
     """Process every id and return {OK, FAILED, SKIPPED} counts.
 
     Up to ``max_workers`` papers run at once, but only one of them talks to arXiv
@@ -169,13 +171,18 @@ def run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger=N
     """
     if type(max_workers) is not int or max_workers < 1:
         raise ValueError("max_workers must be a positive integer")
+    if type(batch_size) is not int or not 1 <= batch_size <= 100: # 100 = arxiv.Client page_size
+        raise ValueError("discovery_batch_size must be an integer from 1 to 100")
     counts = {OK: 0, FAILED: 0, SKIPPED: 0}
     arxiv_lock, s2_lock = threading.Lock(), threading.Lock()
+    prefetch = None
+    if batch_size > 1 and cfg.get("config_name", "B") != "D1":   # D1 (OAI-PMH) has its own discovery
+        prefetch = BatchPrefetcher(cfg, ids, batch_size, client, throttle, logger)
     pool = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures = {
             pool.submit(process_paper, cfg, arxiv_id, client, opts, throttle, hooks,
-                        logger, metrics_logger, arxiv_lock, s2_lock): arxiv_id
+                        logger, metrics_logger, arxiv_lock, s2_lock, prefetch): arxiv_id
             for arxiv_id in ids
         }
         for done, future in enumerate(as_completed(futures), start=1):
@@ -227,7 +234,8 @@ def main() -> None:
         ids = record["input_ids"]
         with metrics.ResourceMonitor(run_dir) as monitor:
             counts = run_papers(cfg, ids, client, opts, throttle, hooks, logger, metrics_logger,
-                                max_workers=cfg.get("max_workers", 1))
+                                max_workers=cfg.get("max_workers", 1),
+                                batch_size=cfg.get("discovery_batch_size", 1))
             print("papers:", counts)
     except KeyboardInterrupt:
         status = "interrupted"

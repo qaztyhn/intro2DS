@@ -170,6 +170,30 @@ def prefetch_metadata(
     )
     return stored
 
+class BatchPrefetcher:
+    """Calls prefetch_metadata once per chunk of ids, the first time one of its papers is reached.
+
+    It makes an arXiv request, so call it only while holding the arXiv lane.
+    """
+
+    def __init__(self, cfg, ids, batch_size, client, throttle, logger):
+        self._cfg, self._ids, self._size = cfg, list(ids), batch_size
+        self._client, self._throttle, self._logger = client, throttle, logger
+        self._position = {arxiv_id: n for n, arxiv_id in enumerate(self._ids)}
+        self._done = set()
+
+    def __call__(self, arxiv_id: str) -> None:
+        if arxiv_id not in self._position:
+            return
+        chunk = self._position[arxiv_id] // self._size
+        if chunk in self._done:
+            return
+        self._done.add(chunk)
+        start = chunk * self._size
+        prefetch_metadata(
+            self._cfg, self._ids[start:start + self._size], self._client, self._throttle, self._logger
+        )
+        
 def parse_submission_history(html: str) -> Dict[int, str]:
     """{version: ISO-8601 UTC timestamp} from the abs page's "Submission history"."""
     block = _HISTORY_BLOCK.search(html)
