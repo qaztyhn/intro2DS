@@ -84,6 +84,16 @@ def make_record(arxiv_id: str) -> Dict[str, Any]:
 def _iso(value) -> Optional[str]:
     return value.isoformat(timespec="seconds") if value else None
 
+_PREFETCHED: Dict[str, arxiv.Result] = {}
+
+
+def _is_complete(existing: Optional[Dict[str, Any]]) -> bool:
+    """True when metadata.json is already good enough to skip the paper (resume)."""
+    return bool(
+        existing
+        and existing.get("status") == OK
+        and (existing.get("latest_version") == 1 or existing.get("revised_dates") is not None)
+    )
 
 def _classify_arxiv_error(exc: Exception) -> CrawlError:
     """Map exceptions raised by the arxiv package / requests onto our error codes."""
@@ -113,6 +123,52 @@ def _query(client: arxiv.Client, throttle: Throttle, id_list: List[str]) -> List
     finally:
         throttle.mark()
 
+def prefetch_metadata(
+    cfg: Dict[str, Any],
+    ids: List[str],
+    client: arxiv.Client,
+    throttle: Throttle,
+    logger: EventLogger,
+) -> int:
+    """Ask arXiv about many papers in ONE API request; return how many answers were kept.
+
+    Best effort only: if the request fails, or an id is missing from the answer, nothing
+    is stored for it and discover_one() falls back to the usual one-request-per-paper path.
+    Papers whose metadata.json is already complete and ids with a vN suffix are left out.
+    """
+    todo = [
+        arxiv_id
+        for arxiv_id in ids
+        if not _HAS_VERSION_SUFFIX.search(arxiv_id)
+        and arxiv_id not in _PREFETCHED
+        and not _is_complete(read_json(paper_dir(cfg, arxiv_id) / "metadata.json"))
+    ]
+    if len(todo) < 2:  # a single paper gains nothing from batching
+        return 0
+
+    watch = Stopwatch()
+    try:
+        results = _query(client, throttle, todo)
+    except Exception as exc:  # noqa: BLE001 - classified, then ignored on purpose
+        error = _classify_arxiv_error(exc)
+        logger.log(
+            "discovery_batch", FAILED, error_code=error.error_code, http_status=error.status_code,
+            message=f"batch of {len(todo)} ids failed, falling back to single requests: {str(error)[:200]}",
+            elapsed_seconds=watch.elapsed,
+        )
+        return 0
+
+    wanted, stored = set(todo), 0
+    for entry in results:
+        base_id, _ = split_versioned_id(entry.get_short_id())
+        if base_id in wanted:
+            _PREFETCHED[base_id] = entry
+            stored += 1
+    logger.log(
+        "discovery_batch", OK, message=f"batch of {len(todo)} ids, {stored} answered",
+        elapsed_seconds=watch.elapsed,
+    )
+    return stored
 
 def parse_submission_history(html: str) -> Dict[int, str]:
     """{version: ISO-8601 UTC timestamp} from the abs page's "Submission history"."""
@@ -182,7 +238,8 @@ def discover_one(
     if _HAS_VERSION_SUFFIX.search(arxiv_id):
         raise CrawlError(f"{arxiv_id!r}: give the base id without a vN suffix", INVALID_ID)
 
-    results = _query(client, throttle, [arxiv_id])
+    prefetched = _PREFETCHED.pop(arxiv_id, None)
+    results = [prefetched] if prefetched is not None else _query(client, throttle, [arxiv_id])
     if not results:
         raise CrawlError(f"arXiv returned no entry for {arxiv_id}", NOT_FOUND)
     latest = results[0]
@@ -223,13 +280,7 @@ def discover_paper(
 ) -> str:
     """Discover one paper. Returns OK, FAILED or SKIPPED. Never raises for a bad paper."""
     path = paper_dir(cfg, arxiv_id) / "metadata.json"
-    existing = read_json(path)
-    complete = (
-        existing
-        and existing.get("status") == OK
-        and (existing.get("latest_version") == 1 or existing.get("revised_dates") is not None)
-    )
-    if complete:
+    if _is_complete(read_json(path)):
         logger.log(STAGE, SKIPPED, arxiv_id=arxiv_id, message="metadata already ok")
         return SKIPPED
 
