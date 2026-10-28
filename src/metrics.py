@@ -420,8 +420,8 @@ def summarize_references(
         if status == "empty" and references:
             raise ValueError("Empty status cannot contain references")
 
-        if status == "ok" and not references:
-            raise ValueError("Use empty status for an empty response")
+        # The crawler marks a nonempty raw response as ok even when every
+        # citedPaper is unresolved and normalization produces no rows.
 
         valid_count += 1
         empty_count += status == "empty"
@@ -666,14 +666,17 @@ def read_events(path: str | Path) -> list[dict]:
     events = []
     required = {"run_id", "timestamp", "stage", "event"}
 
+    def reject_constant(value):
+        raise ValueError(f"Non-finite JSON number: {value}")
+
     with Path(path).open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
 
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError as error:
+                record = json.loads(line, parse_constant=reject_constant)
+            except ValueError as error:
                 raise ValueError(
                     f"Invalid JSON at line {line_number}"
                 ) from error
@@ -731,11 +734,16 @@ def summarize_stage_times(
             started[operation_id] = event
             continue
 
-        if operation_id not in started:
-            raise ValueError("Operation finished without a start")
-
         if operation_id in finished:
             raise ValueError("Duplicate operation finish")
+
+        finished[operation_id] = event
+
+    # Match by identity after reading the stream: concurrent producers or
+    # exported logs need not preserve the ordering of start/finish records.
+    for operation_id, event in finished.items():
+        if operation_id not in started:
+            raise ValueError("Operation finished without a start")
 
         start = started[operation_id]
         for key in ("arxiv_id", "version"):
@@ -752,7 +760,6 @@ def summarize_stage_times(
         if status not in {"ok", "failed"}:
             raise ValueError("Timed outcome must be ok or failed")
 
-        finished[operation_id] = event
         durations.append(duration)
         success_count += status == "ok"
         failed_count += status == "failed"
@@ -806,13 +813,21 @@ def make_request_hook(
     arxiv_id: str | None = None,
     version: int | None = None,
     request_id: str | None = None,
+    request_group_id: str | None = None,
 ):
-    """Create a request-attempt callback with fixed context."""
+    """Create a callback with an explicit per-invocation request factory.
+
+    Shared HTTP helpers call ``for_request()`` once outside their retry loop.
+    Direct callback users retain the supplied request_id. A reused hook thus
+    groups pages by request_group_id without conflating their attempt numbers.
+    """
     if request_id is None:
         request_id = uuid4().hex
 
     if not isinstance(request_id, str) or not request_id.strip():
         raise ValueError("request_id must be a non-empty string")
+    if request_group_id is not None and (not isinstance(request_group_id, str) or not request_group_id.strip()):
+        raise ValueError("request_group_id must be a non-empty string or None")
 
     def on_attempt(
         *,
@@ -843,7 +858,14 @@ def make_request_hook(
             duration_s=duration,
             error_message=error_message,
             request_id=request_id,
+            **({"request_group_id": request_group_id} if request_group_id else {}),
         )
+
+    def for_request():
+        return make_request_hook(logger, stage, arxiv_id=arxiv_id, version=version,
+                                 request_group_id=request_group_id or request_id)
+
+    on_attempt.for_request = for_request
     return on_attempt
 
 def collect_environment() -> dict:
@@ -1035,3 +1057,48 @@ def summarize_request_attempts(
         "attempt_duration_sum_s": sum(durations),
         "attempt_duration_mean_s": mean_or_none(durations),
     }
+
+
+def summarize_http_observations(events: Iterable[dict], run_id: str) -> dict:
+    """Report observable logical requests, retaining ambiguity and unknown totals.
+
+    A duplicate (request_id, attempt) could be pagination reuse or duplicated
+    log records. Never guess a page boundary, deduplicate, or infer retries.
+    The strict summarizer still validates callers that need rejection.
+    """
+    rows = [e for e in events if e["run_id"] == run_id
+            and e["event"] == "request_attempt_finished"]
+    groups, valid, issues = {}, [], []
+    for index, row in enumerate(rows):
+        identity = row.get("request_id")
+        if not isinstance(identity, str) or not identity.strip():
+            issues.append({"request_id": None, "reason": "Missing/invalid request_id",
+                           "logged_record_count": 1, "record_index": index})
+        else:
+            groups.setdefault(identity, []).append(row)
+    for identity, records in groups.items():
+        try:
+            summarize_request_attempts(records, run_id)
+            for record in records:
+                status = record.get("http_status")
+                if status is not None and (type(status) is not int or not 100 <= status <= 599):
+                    raise ValueError("Invalid HTTP status")
+        except (TypeError, ValueError, KeyError) as exc:
+            issues.append({"request_id": identity, "reason": str(exc),
+                           "logged_record_count": len(records)})
+        else:
+            valid.extend(records)
+    subset = summarize_request_attempts(valid, run_id) if valid else None
+    fields = summarize_request_attempts([], run_id)
+    summary = dict(subset) if subset and not issues else {key: None for key in fields}
+    summary.update(
+        identity_status="ambiguous" if issues else "observed" if rows else "unobserved",
+        logged_attempt_record_count=len(rows), issues=issues, validated_subset=subset,
+        observed_http_429_attempt_count=(sum(e.get("http_status") == 429 or e.get("error_code") == "HTTP_429"
+                                           for e in valid) if rows and not issues else None),
+        coverage="partial", total_http_request_count=None, total_http_attempt_count=None,
+        total_http_retry_count=None, total_http_429_count=None,
+        unobserved_sources=["arxiv.Client metadata/revision/batch GETs and internal retries",
+                            "HTTP redirect hops inside requests", "callback failures or missing log records"],
+        count_unit="instrumented logical GET invocations and their observed attempts; not wire HTTP exchanges")
+    return summary
