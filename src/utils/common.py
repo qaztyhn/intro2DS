@@ -1,4 +1,3 @@
-from threading import Lock
 """Helpers shared across the pipeline (discovery, download, stages, tools).
 
 Contents: status constants, paper-id helpers, atomic JSON read/write, the run-level
@@ -13,6 +12,7 @@ import os
 import pathlib
 import re
 import time
+from threading import Lock
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from .errors import INVALID_RESPONSE, CrawlError
