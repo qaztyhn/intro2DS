@@ -43,19 +43,14 @@ The crawler supports:
   - `common.py`: Status constants, paper IDs, JSON I/O, run event log, stopwatch
   - `http.py`: HTTP helpers (throttling, retries)
   - `errors.py`: Error codes
-- `src/tools/`: Standalone tools including `benchmark.py`, `benchmark_protocol.py`,
-  `benchmark_run.py`, `analyze_timeline.py`, `compare_runs.py`, `demo_comparison.py`,
-  `demo_m1.py`, and `prepare_pilot_references.py`
+- `src/tools/`: Standalone scripts that `src.main` does not run (`benchmark.py`, `demo_m1.py`, `prepare_pilot_references.py`)
 - `configs/`: Run configs (`*.yaml`) and ID lists (`*.txt`)
 - `tests/`: Offline unit tests (`python -m pytest -q`)
 - `docs/`: Design notes (benchmark, D1 OAI-PMH, metrics integration, handover)
 
 ## Installation
 
-Requires Python 3.11+ with the current pinned dependencies.
-
-For B0/A/B measurements, reports and CPU-only Colab cells, see
-[M1 metrics comparison](docs/metrics-comparison.md).
+Requires Python 3.10+.
 
 ```bash
 python3 -m venv .venv

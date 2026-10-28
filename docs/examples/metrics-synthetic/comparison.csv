@@ -1,4 +1,0 @@
-variant,run_id,synthetic,benchmark_valid,run_status,cache_mode,wall_seconds,wall_seconds_per_input_paper,mean_paper_processing_seconds,rss_peak_bytes,rss_mean_bytes,disk_peak_bytes,final_output_bytes,complete_papers,failed_papers,unresolved_papers,paper_completion_rate,expected_versions,processed_versions,version_coverage,reference_retrieval_success_rate,valid_references,observed_http_429,observed_retries,schema_status,speedup_vs_B0
-B0,B0,True,True,completed,cold,12,6.0,6.0,4096,2048,8192,1886,2,0,0,1.0,2,2,1.0,1.0,0,2,2,ok,
-A,A,True,True,completed,cold,8,4.0,4.0,4096,2048,8192,1886,2,0,0,1.0,2,2,1.0,1.0,0,2,2,ok,1.5
-B,B,True,True,completed,cold,6,3.0,3.0,4096,2048,8192,1886,2,0,0,1.0,2,2,1.0,1.0,0,2,2,ok,2.0
