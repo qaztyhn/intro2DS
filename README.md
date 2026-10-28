@@ -24,20 +24,29 @@ The crawler supports:
 
 ## Project Structure
 
-- `src/main.py`: Pipeline orchestration
+- `src/main.py`: Pipeline orchestration (`python -m src.main`)
 - `src/config.py`: Load and validate the run config
-- `src/common.py`: Shared helpers (status constants, paper IDs, JSON I/O, run event log)
 - `src/schema.py`: Manifest fields and path/ID validation
-- `src/metrics.py`: Performance monitoring
+- `src/metrics.py`: Performance monitoring (`metrics_events.jsonl`, `ResourceMonitor`)
 - `src/discovery/`: Paper metadata and version discovery
+  - `arxiv_api.py`: Baseline discovery through the arXiv API
+  - `oai_pmh.py`: D1 discovery through arXiv OAI-PMH
+  - `kaggle.py`: Discovery from the Kaggle arXiv metadata snapshot
 - `src/downloader/`: Source downloading
+  - `http.py`: Download LaTeX sources, one request per version
 - `src/stages/`: Pipeline stages after download
   - `extract.py`: Source extraction
   - `references.py`: Reference metadata collection
   - `storage.py`: Data storage
   - `validation.py`: Data validation (used by storage)
-- `src/utils/`: HTTP helpers (throttling, retries) and error codes
+- `src/utils/`: Shared helpers
+  - `common.py`: Status constants, paper IDs, JSON I/O, run event log, stopwatch
+  - `http.py`: HTTP helpers (throttling, retries)
+  - `errors.py`: Error codes
 - `src/tools/`: Standalone scripts that `src.main` does not run (`benchmark.py`, `demo_m1.py`, `prepare_pilot_references.py`)
+- `configs/`: Run configs (`*.yaml`) and ID lists (`*.txt`)
+- `tests/`: Offline unit tests (`python -m pytest -q`)
+- `docs/`: Design notes (benchmark, D1 OAI-PMH, metrics integration, handover)
 
 ## Installation
 
@@ -46,7 +55,7 @@ Requires Python 3.10+.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r src/requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Configuration
@@ -59,6 +68,9 @@ All settings of a run are read from `configs/baseline.yaml`.
   - `configs/ids_full.txt`: the full assigned range (2507.01659 to 2507.06658).
 - `run_id`: `B_{timestamp}` starts a new run each time. Set a fixed value such as `B_run01` to resume an interrupted run: versions already `ok` are skipped and failed ones are retried.
 - `arxiv_delay_seconds`: pause between arXiv requests (keep at 3 or more).
+- `s2_max_retries`, `s2_backoff_base_seconds` (optional): retry budget for Semantic Scholar only. If unset, the shared `max_retries` and `backoff_base_seconds` apply.
+- `S2_API_KEY` (environment variable, not in the config): gives a steady 1 request/second instead of the shared pool. Never commit it.
+- `configs/baseline_pilot.yaml`: baseline B on the stratified 40-ID pilot (`configs/pilot_ids.txt`).
 
 ## Usage
 
