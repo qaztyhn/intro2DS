@@ -51,6 +51,7 @@ from ..utils.errors import (
     CrawlError,
 )
 from ..utils.http import Throttle, request_text
+from ..utils.arxiv_transport import configure_arxiv_timeout
 
 STAGE = "discovery"
 ABS_URL = "https://export.arxiv.org/abs/{arxiv_id}"
@@ -289,6 +290,7 @@ def make_clients(cfg: Dict[str, Any], throttle: Optional[Throttle] = None):
         delay_seconds=cfg["arxiv_delay_seconds"],
         num_retries=cfg["max_retries"],
     )
+    configure_arxiv_timeout(client, cfg["timeout"])
     throttle = throttle or Throttle(cfg["arxiv_delay_seconds"])
     return client, http_options(cfg, throttle), throttle
 
