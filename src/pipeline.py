@@ -161,32 +161,22 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
                     with state_lock:
                         active += 1
                     job = PaperJob(arxiv_id, d_status)
+                    # Always dispatch both consumers, even if the producer
+                    # was interrupted during download. Otherwise a reference
+                    # worker could still be running when the slot is released.
+                    refs_q.put(job)
                     try:
-                        # References can start while this paper downloads.
-                        refs_q.put(job)
-                        try:
-                            from .downloader.http import download_paper
-                            job.downloads = download_paper(
-                                cfg, arxiv_id, opts, logger, metrics_logger
-                            )
-                        except Exception as exc:
-                            job.errors.append(type(exc).__name__)
-                            logger.log("download", FAILED, arxiv_id=arxiv_id,
-                                       error_code=type(exc).__name__,
-                                       message=str(exc)[:300])
-                        # All versions have finished downloading before Extract.
+                        from .downloader.http import download_paper
+                        job.downloads = download_paper(
+                            cfg, arxiv_id, opts, logger, metrics_logger
+                        )
+                    except Exception as exc:
+                        job.errors.append(type(exc).__name__)
+                        logger.log("download", FAILED, arxiv_id=arxiv_id,
+                                   error_code=type(exc).__name__,
+                                   message=str(exc)[:300])
+                    finally:
                         extract_q.put(job)
-                    except BaseException:
-                        # If interrupted between dispatches, complete both
-                        # consumers' participation without leaking a permit.
-                        # Normal errors inside download are handled above.
-                        with state_lock:
-                            job.errors.append("INTERRUPTED")
-                            job.extract_done = True
-                            job.refs_done = True
-                            job.finalizing = True
-                        complete(job)
-                        raise
 
                 remaining = len(batch_ids) - position - 1
                 with state_lock:
