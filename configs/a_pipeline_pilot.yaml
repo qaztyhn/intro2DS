@@ -1,0 +1,17 @@
+# Bounded A pipeline: one arXiv producer, one Extract and one References worker.
+run_id: "A_PIPELINE_{timestamp}"
+config_name: "A_PIPELINE"
+schema_version: 1
+ids_file: "configs/d1_pilot_ids.txt"
+output_root: "experiments"
+discovery_batch_size: 20
+pipeline_max_inflight: 4
+pipeline_extract_queue: 2
+pipeline_references_queue: 4
+pipeline_prefetch_remaining: 5
+arxiv_delay_seconds: 3
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
+timeout: 30
+max_retries: 3
+s2_max_retries: 3
+s2_backoff_base_seconds: 5
