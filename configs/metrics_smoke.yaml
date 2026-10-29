@@ -1,8 +1,0 @@
-# Shared request policy for a short real smoke test on all three checkouts.
-# Runner supplies the common IDs, unique run ID, variant and output_root.
-timeout: 15
-max_retries: 1
-backoff_base_seconds: 2
-arxiv_delay_seconds: 3
-s2_max_retries: 1
-s2_backoff_base_seconds: 5

@@ -1,3 +1,0 @@
-# Two IDs from the fixed pilot. A smoke test does not replace the 40-paper pilot.
-2505.16300
-2505.16447

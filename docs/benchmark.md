@@ -1,8 +1,5 @@
 # M1 Shared Benchmark
 
-The implemented B0/A/B runner, comparison CLI, measurement definitions and
-CPU-only Colab cells are in [metrics-comparison.md](metrics-comparison.md).
-
 ## Purpose
 
 Compare crawler configurations using the same selected paper IDs,
