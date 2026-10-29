@@ -1,0 +1,31 @@
+diff --git a/src/tools/benchmark_run.py b/src/tools/benchmark_run.py
+index dcbb23e..fc81caa 100644
+--- a/src/tools/benchmark_run.py
++++ b/src/tools/benchmark_run.py
+@@ -57,7 +57,6 @@ from src import metrics
+ from src.utils import http
+ from src.discovery.arxiv_api import make_clients
+ import arxiv
+-import requests
+ hook = metrics.make_request_hook(object(), "references")
+ scoped = (callable(vars(hook).get("for_request"))
+           and callable(getattr(http, "_bind_request_hook", None))
+@@ -67,13 +66,14 @@ cfg = json.loads(sys.argv[1])
+ seen = []
+ class StopBeforeNetwork(Exception):
+     pass
+-def stop_send(self, request, **kwargs):
++def stop_send(request, **kwargs):
+     seen.append(kwargs.get("timeout"))
+     raise StopBeforeNetwork()
+-# Intercept before adapter.send: no DNS/HTTP call, even for a timeout Session
+-# wrapper calling another requests.Session. Probe the actual make_clients code.
+-requests.Session.send = stop_send
++# Intercept only this new client's adapters, after its Session has supplied
++# the effective timeout. No Requests class or unrelated Session is modified.
+ client, _, _ = make_clients(cfg)
++for adapter in client._session.adapters.values():
++    adapter.send = stop_send
+ client.num_retries = 0
+ client.delay_seconds = 0
+ try:
