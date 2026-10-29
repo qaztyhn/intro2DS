@@ -12,6 +12,7 @@ from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids,
 from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .discovery.batch import discover_batches
+from .pipeline import run_bounded_pipeline
 from .discovery.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
@@ -223,20 +224,26 @@ def main() -> None:
         ids = record["input_ids"]
         counts = {OK: 0, FAILED: 0, SKIPPED: 0}
         with metrics.ResourceMonitor(run_dir) as monitor:
+            if cfg.get("config_name") == "A_PIPELINE":
+                counts = run_bounded_pipeline(
+                    cfg, ids, client, opts, throttle, hooks, logger,
+                    metrics_logger, root_error_code,
+                )
             discovery_statuses = (
                 discover_batches(
                     cfg, ids, client, opts, throttle, logger, metrics_logger,
                     batch_size=cfg.get("discovery_batch_size", 20),
                 ) if cfg.get("config_name") == "A_BATCH" else None
             )
-            for index, arxiv_id in enumerate(ids, start=1):
+            for index, arxiv_id in enumerate(([] if cfg.get("config_name") == "A_PIPELINE" else ids), start=1):
                 paper_status = process_paper(
                     cfg, arxiv_id, client, opts, throttle, hooks, logger, metrics_logger,
                     discovery_status=(discovery_statuses[arxiv_id] if discovery_statuses is not None else None),
                 )
                 counts[paper_status] += 1
                 print(f"[{index}/{len(ids)}] {arxiv_id}: {paper_status}")
-            print("papers:", counts)
+            if cfg.get("config_name") != "A_PIPELINE":
+                print("papers:", counts)
     except KeyboardInterrupt:
         status = "interrupted"
         logger.log("pipeline", FAILED, error_code="INTERRUPTED",
