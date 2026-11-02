@@ -61,10 +61,17 @@ def test_single_tex_detected_by_content(tmp_path, compressed):
     assert (output / "main.tex").read_bytes() == TEX
 
 
-@pytest.mark.parametrize("content", [tar_bytes({"x.png": b"abc"}),
-                                    tar_bytes({"ref.bib": b"@article{x}"}),
-                                    tar_bytes({}), b"%PDF-1.4\nfixture",
-                                    gzip.compress(b"%PDF-1.4\nfixture")])
+@pytest.mark.parametrize(
+    "content",
+    [
+        tar_bytes({"x.png": b"abc"}),
+        tar_bytes({"ref.bib": b"@article{x}"}),
+        tar_bytes({}),
+        b"%PDF-1.4\nfixture",
+        gzip.compress(b"%PDF-1.4\nfixture")
+    ],
+    ids=["tar_png", "tar_bib", "tar_empty", "pdf", "gzip_pdf"]
+)
 def test_valid_without_tex_is_empty(tmp_path, content):
     result, output = extract(tmp_path, content)
     assert result["extract_status"] == "empty"
@@ -80,7 +87,14 @@ def test_valid_without_tex_is_empty(tmp_path, content):
     (b"<html>\\begin{document}error</html>", "UNSUPPORTED_FORMAT"),
     (b"arbitrary text", "UNSUPPORTED_FORMAT"),
 ])
-def test_bad_input_never_publishes_partial_source(tmp_path, content, code):
+def test_bad_input_never_publishes_partial_source(tmp_path, content, code,ids=[
+    "bad_gzip",
+    "truncated_gzip",
+    "truncated_tar",
+    "zip",
+    "html",
+    "plain_text"
+] ):
     result, output = extract(tmp_path, content)
     assert result["extract_status"] == "failed"
     assert result["error_code"] == code
