@@ -44,6 +44,7 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
     max_inflight = _positive_int(cfg, "pipeline_max_inflight", 4)
     extract_qsize = _positive_int(cfg, "pipeline_extract_queue", 2)
     refs_qsize = _positive_int(cfg, "pipeline_references_queue", 4)
+    extract_workers = _positive_int(cfg, "pipeline_extract_workers", 1)
     prefetch_remaining = _positive_int(
         cfg, "pipeline_prefetch_remaining", 5, minimum=0, maximum=batch_size
     )
@@ -131,11 +132,21 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
                 q.task_done()
 
     workers = [
-        Thread(target=worker, args=(extract_q, "extract", "extract_done"),
-               name="A-extract"),
-        Thread(target=worker, args=(refs_q, "references", "refs_done"),
-               name="A-references"),
+        Thread(
+            target=worker,
+            args=(extract_q, "extract", "extract_done"),
+            name=f"A-extract-{i+1}"
+        )
+        for i in range(extract_workers)
     ]
+
+    workers.append(
+        Thread(
+            target=worker,
+            args=(refs_q, "references", "refs_done"),
+            name="A-references"
+        )
+    )
     for thread in workers:
         thread.start()
 
@@ -176,7 +187,8 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
                                    error_code=type(exc).__name__,
                                    message=str(exc)[:300])
                     finally:
-                        extract_q.put(job)
+                        for _ in range(extract_workers):
+                            extract_q.put(None)
 
                 remaining = len(batch_ids) - position - 1
                 with state_lock:
