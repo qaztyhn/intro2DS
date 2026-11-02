@@ -187,8 +187,7 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
                                    error_code=type(exc).__name__,
                                    message=str(exc)[:300])
                     finally:
-                        for _ in range(extract_workers):
-                            extract_q.put(None)
+                        extract_q.put(job)
 
                 remaining = len(batch_ids) - position - 1
                 with state_lock:
@@ -203,7 +202,8 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
                     )
     finally:
         # Consumers drain their pending jobs even on producer exceptions.
-        extract_q.put(None)
+        for _ in range(extract_workers):
+            extract_q.put(None)
         refs_q.put(None)
         extract_q.join()
         refs_q.join()
