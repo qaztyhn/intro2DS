@@ -79,22 +79,26 @@ def test_valid_without_tex_is_empty(tmp_path, content):
     assert output.is_dir()
 
 
-@pytest.mark.parametrize("content,code", [
-    (b"\x1f\x8bbroken", "CORRUPT_SOURCE"),
-    (gzip.compress(TEX)[:-5], "CORRUPT_SOURCE"),
-    (tar_bytes({"main.tex": TEX})[:520], "CORRUPT_SOURCE"),
-    (b"PK\x03\x04zip", "UNSUPPORTED_FORMAT"),
-    (b"<html>\\begin{document}error</html>", "UNSUPPORTED_FORMAT"),
-    (b"arbitrary text", "UNSUPPORTED_FORMAT"),
-])
-def test_bad_input_never_publishes_partial_source(tmp_path, content, code,ids=[
-    "bad_gzip",
-    "truncated_gzip",
-    "truncated_tar",
-    "zip",
-    "html",
-    "plain_text"
-] ):
+@pytest.mark.parametrize(
+    "content,code",
+    [
+        (b"\x1f\x8bbroken", "CORRUPT_SOURCE"),
+        (gzip.compress(TEX)[:-5], "CORRUPT_SOURCE"),
+        (tar_bytes({"main.tex": TEX})[:520], "CORRUPT_SOURCE"),
+        (b"PK\x03\x04zip", "UNSUPPORTED_FORMAT"),
+        (b"<html>\\begin{document}error</html>", "UNSUPPORTED_FORMAT"),
+        (b"arbitrary text", "UNSUPPORTED_FORMAT"),
+    ],
+    ids=[
+        "bad_gzip",
+        "truncated_gzip",
+        "truncated_tar",
+        "zip",
+        "html",
+        "plain_text",
+    ],
+)
+def test_bad_input_never_publishes_partial_source(tmp_path, content, code):
     result, output = extract(tmp_path, content)
     assert result["extract_status"] == "failed"
     assert result["error_code"] == code
