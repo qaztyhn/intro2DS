@@ -76,7 +76,7 @@ def fetch_references(arxiv_id, **kwargs):
     if api_key:
         headers["x-api-key"] = api_key
     # Pace by whether a key exists now, not when utils.http was imported (a Colab key may be set later).
-    S2.min_interval = 1.0 if api_key else 3.0
+    S2.min_interval = 3.0
     
     all_references = []
     offset = 0
