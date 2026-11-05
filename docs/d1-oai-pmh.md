@@ -119,7 +119,7 @@ Mỗi file có local diff lúc bắt đầu thu gọn được phân loại như
 | File | Xử lý/phạm vi |
 | --- | --- |
 | `src/main.py` | Giữ: chọn discovery D1, truyền metrics logger, giữ nhánh B |
-| `src/discovery/oai_pmh.py` | Giữ: parser, resume, metrics và shared HTTP của D1 |
+| `src/alternative_methods/oai_pmh.py` | Giữ: parser, resume, metrics và shared HTTP của D1 |
 | `configs/d1_pilot.yaml` | Giữ: cấu hình riêng D1 |
 | `configs/d1_pilot_ids.txt` | Giữ: 40 ID pilot chung cho D1 |
 | `tests/test_oai_pmh.py` | Giữ: test riêng D1 |
@@ -127,7 +127,7 @@ Mỗi file có local diff lúc bắt đầu thu gọn được phân loại như
 | `src/discovery/arxiv_api.py` | Giữ duy nhất `from .. import metrics`: cần để main import được |
 | `src/downloader/http.py` | Giữ duy nhất import typing và metrics: cần để main/downloader import và chạy được |
 | `README.md` | Khôi phục chính xác `34c46ec`; sửa đường dẫn tài liệu chung không thuộc D1 |
-| `src/discovery/kaggle.py` | Khôi phục chính xác `34c46ec`; bỏ mọi sửa logic D2 |
+| `src/alternative_methods/kaggle.py` | Khôi phục chính xác `34c46ec`; bỏ mọi sửa logic D2 |
 | `tests/test_discovery_metrics.py` | Khôi phục chính xác `34c46ec`; không sửa test chung |
 | `tests/test_download_metrics.py` | Khôi phục chính xác `34c46ec`; không sửa test chung |
 
@@ -146,7 +146,7 @@ Hai file ngoài D1 chỉ bổ sung tổng cộng 3 dòng import, không đổi h
 
 Các file/cấu trúc đã có trên main, không phải phần D1 tạo mới: `requirements.txt`
 (có `kagglehub==1.0.3`), `src/utils/common.py` (chuyển từ `src/common.py`),
-`src/discovery/kaggle.py`, `tests/test_kaggle.py`, `src/utils/http.py` với throttle
+`src/alternative_methods/kaggle.py`, `tests/test_kaggle.py`, `src/utils/http.py` với throttle
 Semantic Scholar mới, `src/schema.py`, các module trong `src/stages/`,
 `src/tools/demo_m1.py` và các test extract/storage/validation/main-hooks đã đổi
 import. `src/requirements.txt` bị xóa bởi main; D1 không tạo lại.
@@ -173,7 +173,7 @@ nhưng không được tính là file của PR D1.
 ```bash
 git add docs/d1-oai-pmh.md \
   configs/d1_pilot.yaml configs/d1_pilot_ids.txt \
-  src/main.py src/discovery/oai_pmh.py src/discovery/arxiv_api.py \
+  src/main.py src/alternative_methods/oai_pmh.py src/discovery/arxiv_api.py \
   src/downloader/http.py tests/test_oai_pmh.py
 git diff --cached --stat
 git diff --cached --check

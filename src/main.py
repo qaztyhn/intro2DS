@@ -1,4 +1,4 @@
-"""B/D1 pipeline driver. One run = one run_id = one events.jsonl."""
+"""Pipeline driver. One run = one run_id = one events.jsonl."""
 
 import importlib
 import os
@@ -13,7 +13,7 @@ from .config import http_options, load_config
 from .discovery.arxiv_api import discover_paper, make_clients
 from .discovery.batch import discover_batches
 from .pipeline import run_bounded_pipeline
-from .discovery.oai_pmh import discover_paper as d1_discover_paper
+from .alternative_methods.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
 from .stages.references import crawl_references

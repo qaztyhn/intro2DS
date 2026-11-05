@@ -22,7 +22,7 @@ The source versions are still downloaded individually; `references.json` is stil
 
 ## Files
 
-- `src/discovery/batch.py`: batch lookup, version dates, mapping and fallbacks.
+- `src/discovery/batch.py`: batch lookup, version dates, mapping and fallbacks (also used by the main parallel pipeline).
 - `src/main.py`: invokes batch discovery first and overlaps the two per-paper lanes only for `config_name: A_BATCH`.
 - `src/utils/common.py`: protects the shared event logger with a thread lock; `metrics.EventLogger` already uses a lock.
 - `configs/a_batch_pilot.yaml`: isolated pilot config with 40 IDs.

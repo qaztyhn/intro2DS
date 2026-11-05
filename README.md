@@ -30,8 +30,9 @@ The crawler supports:
 - `src/metrics.py`: Performance monitoring (`metrics_events.jsonl`, `ResourceMonitor`)
 - `src/discovery/`: Paper metadata and version discovery
   - `arxiv_api.py`: Baseline discovery through the arXiv API
-  - `oai_pmh.py`: D1 discovery through arXiv OAI-PMH
-  - `kaggle.py`: Discovery from the Kaggle arXiv metadata snapshot
+  - `batch.py`: Batch arXiv API discovery used by the parallel pipeline
+- `src/pipeline.py`: Main parallel pipeline (`A_PIPELINE`)
+- `src/alternative_methods/`: Optional discovery methods (`oai_pmh.py`, `kaggle.py`)
 - `src/downloader/`: Source downloading
   - `http.py`: Download LaTeX sources, one request per version
 - `src/stages/`: Pipeline stages after download
@@ -75,6 +76,7 @@ All settings of a run are read from `configs/baseline.yaml`.
 ## Usage
 
 ```bash
+python -m src.main configs/a_pipeline_pilot.yaml  # parallel pipeline with arXiv API and S2
 python -m src.main                      # uses configs/baseline.yaml
 python -m src.main configs/other.yaml   # uses another config
 ```
