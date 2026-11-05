@@ -82,7 +82,7 @@ def run_bounded_pipeline(cfg, ids, client, opts, throttle, hooks, logger,
         try:
             func(cfg, job.arxiv_id, logger)
         except Exception as exc:
-            code = type(exc).__name__
+            code = getattr(exc, "error_code", type(exc).__name__)
             logger.log(
                 stage, FAILED, arxiv_id=job.arxiv_id, error_code=code,
                 message=str(exc)[:300], elapsed_seconds=watch.elapsed,
