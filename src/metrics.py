@@ -806,13 +806,21 @@ def make_request_hook(
     arxiv_id: str | None = None,
     version: int | None = None,
     request_id: str | None = None,
+    request_group_id: str | None = None,
 ):
-    """Create a request-attempt callback with fixed context."""
+    """Create a callback with an explicit per-invocation request factory.
+
+    Shared HTTP helpers call ``for_request()`` once outside their retry loop.
+    Direct callback users retain the supplied request_id. A reused hook thus
+    groups pages by request_group_id without conflating their attempt numbers.
+    """
     if request_id is None:
         request_id = uuid4().hex
 
     if not isinstance(request_id, str) or not request_id.strip():
         raise ValueError("request_id must be a non-empty string")
+    if request_group_id is not None and (not isinstance(request_group_id, str) or not request_group_id.strip()):
+        raise ValueError("request_group_id must be a non-empty string or None")
 
     def on_attempt(
         *,
@@ -843,7 +851,14 @@ def make_request_hook(
             duration_s=duration,
             error_message=error_message,
             request_id=request_id,
+            **({"request_group_id": request_group_id} if request_group_id else {}),
         )
+
+    def for_request():
+        return make_request_hook(logger, stage, arxiv_id=arxiv_id, version=version,
+                                 request_group_id=request_group_id or request_id)
+
+    on_attempt.for_request = for_request
     return on_attempt
 
 def collect_environment() -> dict:
