@@ -24,6 +24,7 @@ def make_reference(paper_id="paper-1", title="Example paper"):
             "title": title,
             "authors": [{"name": "Alice"}, {"name": "Bob"}],
             "externalIds": {"ArXiv": "1234.56789", "DOI": "10.example/paper"},
+            "publicationDate": "2023-06-15",
         }
     }
 
@@ -132,7 +133,7 @@ class FetchReferencesTests(unittest.TestCase):
                 call(
                     url,
                     params={
-                        "fields": "title,authors,externalIds",
+                        "fields": "title,authors,externalIds,publicationDate",
                         "offset": offset,
                         "limit": 1000,
                     },
@@ -186,7 +187,7 @@ class NormalizeReferenceTests(unittest.TestCase):
                 "ref_arxiv_id": "1234.56789",
                 "ref_title": "Example paper",
                 "ref_authors": ["Alice", "Bob"],
-                "ref_submission_date": None,
+                "ref_submission_date": "2023-06-15",
                 "ref_s2_id": "paper-1",
             },
         )
