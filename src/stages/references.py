@@ -83,7 +83,7 @@ def fetch_references(arxiv_id, **kwargs):
 
     while True:
         params = {
-            "fields": "title,authors,externalIds",
+            "fields": "title,authors,externalIds,publicationDate",
             "offset": offset,
             "limit": LIMIT
         }
@@ -147,7 +147,7 @@ def normalize_reference(arxiv_id, reference):
         "ref_title": paper.get("title"),
         "ref_authors": authors,
         # The requested API fields do not include a submission date.
-        "ref_submission_date": None,
+        "ref_submission_date": paper.get("publicationDate"),
         "ref_s2_id": paper.get("paperId")
     }
 
