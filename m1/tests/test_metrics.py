@@ -1,39 +1,39 @@
 import pytest
 
-from src.metrics import mean_or_none, safe_ratio
-import src.metrics as metrics
-from src.metrics import Timer
-from src.metrics import directory_size_bytes
+from m1.src.metrics import mean_or_none, safe_ratio
+import m1.src.metrics as metrics
+from m1.src.metrics import Timer
+from m1.src.metrics import directory_size_bytes
 from types import SimpleNamespace
-from src.metrics import process_tree_rss_bytes
-from src.metrics import summarize_rss_samples
-from src.metrics import ResourceSampler
-from src.metrics import ResourceMonitor
+from m1.src.metrics import process_tree_rss_bytes
+from m1.src.metrics import summarize_rss_samples
+from m1.src.metrics import ResourceSampler
+from m1.src.metrics import ResourceMonitor
 import json
 from datetime import datetime
 
-from src.metrics import EventLogger
+from m1.src.metrics import EventLogger
 from contextlib import contextmanager
 from uuid import uuid4
 
-from src.metrics import measure_stage
-from src.metrics import summarize_references
-from src.metrics import summarize_versions
+from m1.src.metrics import measure_stage
+from m1.src.metrics import summarize_references
+from m1.src.metrics import summarize_versions
 from copy import deepcopy
 
-from src.metrics import summarize_papers
-from src.metrics import summarize_source_sizes
-from src.metrics import read_events
-from src.metrics import summarize_stage_times
-from src.metrics import log_resource_results
-from src.metrics import make_request_hook
+from m1.src.metrics import summarize_papers
+from m1.src.metrics import summarize_source_sizes
+from m1.src.metrics import read_events
+from m1.src.metrics import summarize_stage_times
+from m1.src.metrics import log_resource_results
+from m1.src.metrics import make_request_hook
 
-from src.metrics import collect_environment
-from src.metrics import build_run_report
+from m1.src.metrics import collect_environment
+from m1.src.metrics import build_run_report
 
-from src.metrics import write_run_report
+from m1.src.metrics import write_run_report
 
-from src.metrics import summarize_request_attempts
+from m1.src.metrics import summarize_request_attempts
 
 @pytest.mark.parametrize(
     "numerator, denominator, expected",

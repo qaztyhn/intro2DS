@@ -10,10 +10,10 @@ from importlib import metadata
 
 from .utils.common import FAILED, OK, SKIPPED, EventLogger, Stopwatch, load_ids, paper_key, read_json, utc_now_iso, write_json_atomic
 from .config import http_options, load_config
-from .discovery.arxiv_api import discover_paper, make_clients
+from .alternative_methods.arxiv_api import discover_paper, make_clients
 from .discovery.batch import discover_batches
 from .pipeline import run_bounded_pipeline
-from .discovery.oai_pmh import discover_paper as d1_discover_paper
+from .alternative_methods.oai_pmh import discover_paper as d1_discover_paper
 from .downloader.http import download_paper
 from .stages.extract import extract_paper
 from .stages.references import crawl_references

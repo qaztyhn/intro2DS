@@ -1,7 +1,7 @@
 import pytest
 import json
 
-from src.metrics import (
+from m1.src.metrics import (
     EventLogger,
     ResourceMonitor,
     log_resource_results,

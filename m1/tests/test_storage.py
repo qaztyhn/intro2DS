@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-from src.utils import common
-from src.stages import storage
-from src.downloader.http import make_manifest
+from m1.src.utils import common
+from m1.src.stages import storage
+from m1.src.downloader.http import make_manifest
 
 ID = "hep-th/9901001"
 
