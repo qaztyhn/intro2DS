@@ -6,12 +6,12 @@ import tarfile
 
 import pytest
 
-from src.utils.common import EventLogger, read_json, write_json_atomic
-from src.downloader.http import make_manifest
-from src.stages.extract import ExtractionLimits, extract_paper, extract_source, extract_version
-from src.schema import paper_directory
-from src.utils.errors import CrawlError
-from src import metrics
+from m1.src.utils.common import EventLogger, read_json, write_json_atomic
+from m1.src.downloader.http import make_manifest
+from m1.src.stages.extract import ExtractionLimits, extract_paper, extract_source, extract_version
+from m1.src.schema import paper_directory
+from m1.src.utils.errors import CrawlError
+from m1.src import metrics
 
 TEX = b"\\documentclass{article}\r\n% original bytes \xff\r\n\\includegraphics{a}\n"
 
@@ -216,7 +216,7 @@ def test_manifest_resume_without_archive_and_old_id(tmp_path):
 
 def test_resume_after_source_published_but_manifest_write_interrupted(tmp_path, monkeypatch):
     cfg, paper, _ = seed_version(tmp_path)
-    import src.stages.extract as module
+    import m1.src.stages.extract as module
     original = module.write_json_atomic
     def interrupted(*args):
         raise OSError("interrupted manifest write")

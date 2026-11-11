@@ -2,8 +2,8 @@
 import threading
 import time
 
-from src import pipeline
-from src.utils.common import EventLogger
+from m1.src import pipeline
+from m1.src.utils.common import EventLogger
 
 
 def test_pipeline_overlaps_papers_and_stores_after_both(tmp_path, monkeypatch):
