@@ -5,18 +5,20 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import xml.etree.ElementTree as ET
 
+from m1.src import main
 import pytest
 import requests
 
-from src import main, metrics
-from src.utils.common import EventLogger, load_ids, paper_key, read_json, write_json_atomic
-from src.config import PROJECT_ROOT, http_options, load_config
-from src.discovery import arxiv_api, oai_pmh as d1
-from src.stages.storage import load_metadata, save_metadata
-from src.stages.validation import validate_metadata
-from src.tools.benchmark import select_benchmark, select_pilot
-from src.utils import http
-from src.utils.errors import CrawlError
+from m1.src import metrics
+from m1.src.alternative_methods import arxiv_api
+from m1.src.utils.common import EventLogger, load_ids, paper_key, read_json, write_json_atomic
+from m1.src.config import PROJECT_ROOT, http_options, load_config
+from m1.src.alternative_methods import oai_pmh as d1
+from m1.src.stages.storage import load_metadata, save_metadata
+from m1.src.stages.validation import validate_metadata
+from m1.src.tools.benchmark import select_benchmark, select_pilot
+from m1.src.utils import http
+from m1.src.utils.errors import CrawlError
 
 ID = "2507.01659"
 OLD_ID = "hep-th/9901001"

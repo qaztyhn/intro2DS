@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.utils import http
+from m1.src.utils import http
 
 
 URL = "https://example.test/file"

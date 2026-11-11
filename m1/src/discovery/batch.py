@@ -12,7 +12,7 @@ from ..utils.common import (
     FAILED, OK, SKIPPED, Stopwatch, read_json, split_versioned_id,
     write_json_atomic,
 )
-from . import arxiv_api as baseline
+from ..alternative_methods import arxiv_api as baseline
 
 
 def chunks(items, size):

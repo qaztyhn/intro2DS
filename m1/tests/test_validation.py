@@ -1,8 +1,8 @@
 import pytest
 
-from src.utils.common import read_json, write_json_atomic
-from src.downloader.http import make_manifest
-from src.stages.validation import (validate_manifest, validate_metadata, validate_paper,
+from m1.src.utils.common import read_json, write_json_atomic
+from m1.src.downloader.http import make_manifest
+from m1.src.stages.validation import (validate_manifest, validate_metadata, validate_paper,
                             validate_references, validate_run)
 
 

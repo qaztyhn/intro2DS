@@ -8,10 +8,10 @@ import tarfile
 
 import pytest
 
-from src import metrics
-from src.utils.common import EventLogger, read_json, write_json_atomic
-from src.downloader import http as downloader
-from src.utils.errors import NOT_FOUND, CrawlError
+from m1.src import metrics
+from m1.src.utils.common import EventLogger, read_json, write_json_atomic
+from m1.src.downloader import http as downloader
+from m1.src.utils.errors import NOT_FOUND, CrawlError
 
 ARXIV_ID = "2507.01659"
 KEY = "2507-01659"
