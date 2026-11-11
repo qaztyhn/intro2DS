@@ -1,5 +1,5 @@
-from src.utils.errors import HTTP_4XX, NOT_FOUND, TIMEOUT, ClientError, CrawlError
-from src.utils.http import Throttle
+from m1.src.utils.errors import HTTP_4XX, NOT_FOUND, TIMEOUT, ClientError, CrawlError
+from m1.src.utils.http import Throttle
 
 def test_status_code_is_stored():
     assert CrawlError("boom", TIMEOUT, 503).status_code == 503

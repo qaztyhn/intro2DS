@@ -10,10 +10,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src import metrics
-from src.utils.common import EventLogger, read_json
-from src.discovery import arxiv_api as discovery
-from src.utils.errors import HTTP_5XX, NETWORK_ERROR, CrawlError
+from m1.src import metrics
+from m1.src.utils.common import EventLogger, read_json
+from m1.src.alternative_methods import arxiv_api as discovery
+from m1.src.utils.errors import HTTP_5XX, NETWORK_ERROR, CrawlError
 
 Author = namedtuple("Author", "name")
 HISTORY = (

@@ -5,9 +5,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.discovery import kaggle
-from src.utils.common import FAILED, OK, SKIPPED, read_json, write_json_atomic
-from src.utils.errors import INVALID_ID, INVALID_RESPONSE, NOT_FOUND
+from m1.src.alternative_methods import kaggle
+from m1.src.utils.common import FAILED, OK, SKIPPED, read_json, write_json_atomic
+from m1.src.utils.errors import INVALID_ID, INVALID_RESPONSE, NOT_FOUND
 
 
 ARXIV_ID = "2507.01659"

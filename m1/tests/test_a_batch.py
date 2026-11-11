@@ -5,9 +5,10 @@ import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from src import main
-from src.discovery import arxiv_api, batch
-from src.utils.common import EventLogger, read_json
+from m1.src import main
+from m1.src.alternative_methods import arxiv_api
+from m1.src.discovery import batch
+from m1.src.utils.common import EventLogger, read_json
 
 
 def fake_result(arxiv_id, version):

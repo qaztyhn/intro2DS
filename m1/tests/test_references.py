@@ -4,8 +4,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock, call, patch
 
-from src.stages import references
-from src.utils.errors import (
+from m1.src.stages import references
+from m1.src.utils.errors import (
     ClientError,
     InvalidResponseError,
     NetworkError,

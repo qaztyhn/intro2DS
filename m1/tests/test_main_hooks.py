@@ -1,10 +1,11 @@
 """The driver wires extract, references and storage; none is skipped."""
 
+from m1.src import main
 import pytest
 
-from src import main, metrics
-from src.utils.common import EventLogger
-from src.utils.errors import CrawlError
+from m1.src import metrics
+from m1.src.utils.common import EventLogger
+from m1.src.utils.errors import CrawlError
 
 
 def test_all_paper_stages_are_wired_in_order(tmp_path):
