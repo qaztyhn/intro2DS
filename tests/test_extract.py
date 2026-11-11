@@ -2,6 +2,7 @@
 
 import gzip
 import io
+import random
 import tarfile
 
 import pytest
@@ -135,6 +136,32 @@ def test_rejects_links_and_special_entries(tmp_path, entry_type):
                                    ExtractionLimits(max_members=1)])
 def test_resource_limits(tmp_path, limits):
     result, output = extract(tmp_path, tar_bytes({"main.tex": TEX, "x.bib": b"x"}), limits=limits)
+    assert result["error_code"] == "CORRUPT_SOURCE"
+    assert not output.exists()
+
+
+BIG_PDF = b"%PDF-1.4\n" + random.Random(0).randbytes(4096)
+TINY_LIMITS = ExtractionLimits(max_archive_bytes=100, max_unpacked_bytes=100,
+                               max_file_bytes=100, max_members=10)
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["pdf", "gzip_pdf"])
+def test_pdf_over_every_limit_is_empty_not_failed(tmp_path, compressed):
+    content = gzip.compress(BIG_PDF) if compressed else BIG_PDF
+    assert len(content) > TINY_LIMITS.max_archive_bytes
+    result, output = extract(tmp_path, content, limits=TINY_LIMITS)
+    assert result["extract_status"] == "empty"
+    assert result["error_code"] == "NO_TEX_SOURCE"
+    assert result["source_format"] == ("gz" if compressed else "pdf")
+    assert result["source_files"] == []
+    assert result["unpacked_total_bytes"] == len(BIG_PDF)
+    assert result["kept_source_bytes"] == 0
+    assert output.is_dir() and not any(output.iterdir())
+
+
+def test_truncated_gzip_pdf_still_fails(tmp_path):
+    result, output = extract(tmp_path, gzip.compress(BIG_PDF)[:-5], limits=TINY_LIMITS)
+    assert result["extract_status"] == "failed"
     assert result["error_code"] == "CORRUPT_SOURCE"
     assert not output.exists()
 

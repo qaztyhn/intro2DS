@@ -9,6 +9,7 @@ import gzip
 import os
 import pathlib
 import re
+import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -137,6 +138,28 @@ def _extract_tar(payload, stage, limits):
     return sorted(files), total, kept
 
 
+def _is_pdf_archive(path):
+    """True for a PDF or a gzip-wrapped PDF. Reads only the first bytes."""
+    try:
+        with path.open("rb") as raw:
+            head = raw.read(5)
+            if head == b"%PDF-":
+                return True
+            if head[:2] != b"\x1f\x8b":
+                return False
+            raw.seek(0)
+            with gzip.GzipFile(fileobj=raw) as gz:
+                return gz.read(5) == b"%PDF-"
+    except (OSError, EOFError):
+        return False
+
+
+def _gzip_size(path):
+    """Decompressed size, counted in chunks without storing anything."""
+    with gzip.open(path, "rb") as source:
+        return _copy(source, None, sys.maxsize)
+
+
 def _same_output(existing, staged, files):
     existing_files = set()
     for path in existing.rglob("*"):
@@ -176,7 +199,9 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
         output_dir = no_symlinks(output_dir)
         size = archive_path.stat().st_size
         result["archive_bytes"] = size
-        if size > limits.max_archive_bytes:
+        # A PDF-only source is never copied or kept, so size limits do not apply to it.
+        pdf_only = _is_pdf_archive(archive_path)
+        if size > limits.max_archive_bytes and not pdf_only:
             raise CrawlError("archive exceeds download size limit", CORRUPT_SOURCE)
         if output_dir.exists() and (not output_dir.is_dir()
                                     or (any(output_dir.iterdir()) and not reuse_existing)):
@@ -191,7 +216,7 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
                 head = source.read(65536)
             compressed = head.startswith(b"\x1f\x8b")
             payload = archive_path
-            if compressed:
+            if compressed and not pdf_only:
                 result["source_format"] = "gz"
                 payload = tmp / "payload"
                 # Includes tar headers, padding and extended headers, not just files.
@@ -200,16 +225,15 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
                     _copy(source, dest, stream_limit)
                 with payload.open("rb") as source:
                     head = source.read(65536)
-            if _is_tar(payload):
+            if pdf_only:
+                result["source_format"] = "gz" if compressed else "pdf"
+                files, kept = [], 0
+                total = _gzip_size(archive_path) if compressed else size
+            elif _is_tar(payload):
                 result["source_format"] = "tar.gz" if compressed else "tar"
                 files, total, kept = _extract_tar(payload, stage, limits)
             elif head[257:262] == b"ustar":
                 raise CrawlError("corrupt tar header", CORRUPT_SOURCE)
-            elif head.startswith(b"%PDF-"):
-                result["source_format"] = "gz" if compressed else "pdf"
-                files, total, kept = [], payload.stat().st_size, 0
-                if total > min(limits.max_file_bytes, limits.max_unpacked_bytes):
-                    raise CrawlError("PDF source exceeds size limit", CORRUPT_SOURCE)
             elif _is_tex(head):
                 result["source_format"] = "gz" if compressed else "tex"
                 with payload.open("rb") as source, (stage / "main.tex").open("wb") as dest:
