@@ -1,4 +1,5 @@
 import json
+import pytest
 from pathlib import Path
 
 from src.parsing import profiling as P
@@ -165,3 +166,61 @@ def test_unrecoverable_bibliography_rate(tmp_path):
     rate = s["rates"]["bib_cmd_no_recoverable_source"]
     assert (rate["count"], rate["denominator"]) == (1, 2)
     assert s["rates"]["bbl_present"]["count"] == 0
+
+
+def _two_ranges(tmp_path):
+    r1, r2 = tmp_path / "run1", tmp_path / "run2"
+    make_paper(r1, "2501.00010", {1: NESTED, 2: NO_TEX})
+    make_paper(r1, "2501.00011", {1: SINGLE})
+    make_paper(r2, "2501.00011", {1: SINGLE})   # duplicate id across ranges
+    make_paper(r2, "2501.00012", {1: SINGLE})
+    return [P.scan_range(r1, ["2501.00010", "2501.00011"], "r1"),
+            P.scan_range(r2, ["2501.00011", "2501.00012"], "r2")]
+
+
+def test_merge_dedups_and_recomputes(tmp_path):
+    merged = P.merge_scans(_two_ranges(tmp_path))
+    assert merged["duplicates"] == [
+        {"arxiv_id": "2501.00011", "kept_in": "r1", "dropped_from": "r2"}]
+    o = merged["overall"]["counts"]
+    assert o["publications_found"] == 3 and o["versions"] == 4
+    r2 = merged["ranges"]["r2"]["summary"]["counts"]
+    assert r2["publications_found"] == 1 and r2["versions"] == 1
+    r1 = merged["ranges"]["r1"]["summary"]["counts"]
+    assert r1["versions"] + r2["versions"] == o["versions"]
+
+
+def test_merge_rejects_duplicate_labels(tmp_path):
+    scans = _two_ranges(tmp_path)
+    scans[1]["meta"]["label"] = "r1"
+    with pytest.raises(ValueError):
+        P.merge_scans(scans)
+
+
+def test_render_report_sections(tmp_path):
+    md = P.render_report(P.merge_scans(_two_ranges(tmp_path)))
+    for needle in ("# Báo cáo profiling M2", "r1", "r2", "## 2. Tỷ lệ",
+                   "2501.00010", "Publication trùng giữa các range", "/4 ("):
+        assert needle in md
+
+
+def test_cli_merge_writes_files_and_is_deterministic(tmp_path):
+    paths = []
+    for scan in _two_ranges(tmp_path):
+        p = tmp_path / f"{scan['meta']['label']}.json"
+        p.write_text(json.dumps(scan))
+        paths.append(str(p))
+    outputs = []
+    for tag in ("x", "y"):
+        out_json, out_md = tmp_path / f"{tag}.json", tmp_path / f"{tag}.md"
+        assert P.main(["merge", "--inputs", *paths, "--out-json", str(out_json),
+                       "--out-md", str(out_md)]) == 0
+        outputs.append((out_json.read_text(), out_md.read_text()))
+    assert outputs[0] == outputs[1]
+
+
+def test_cli_merge_bad_input_returns_2(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}")
+    assert P.main(["merge", "--inputs", str(bad), "--out-json", str(tmp_path / "o.json"),
+                   "--out-md", str(tmp_path / "o.md")]) == 2

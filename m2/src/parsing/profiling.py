@@ -441,6 +441,222 @@ def scan_range(run_dir: Path, ids: list[str], label: str) -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# Merge of several ranges + Markdown report
+# --------------------------------------------------------------------------
+def _load_scan(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not {"meta", "papers", "versions", "errors"} <= set(data):
+        raise ValueError(f"{path}: not a profiling scan file")
+    return data
+
+
+def merge_scans(scans: list[dict]) -> dict:
+    """Merge range scans. A publication id found in several ranges is counted
+    once (first range wins) and reported under 'duplicates'."""
+    labels = [s["meta"]["label"] for s in scans]
+    repeated = sorted(lb for lb, c in Counter(labels).items() if c > 1)
+    if repeated:
+        raise ValueError(f"duplicate range labels: {repeated}")
+
+    seen: dict[str, str] = {}
+    duplicates: list[dict] = []
+    all_papers: list[dict] = []
+    all_versions: list[dict] = []
+    errors: list[dict] = []
+    ranges: dict[str, dict] = {}
+
+    for scan in scans:
+        label = scan["meta"]["label"]
+        kept_papers: list[dict] = []
+        dropped: set[str] = set()
+        for p in scan["papers"]:
+            first = seen.get(p["arxiv_id"])
+            if first is None:
+                seen[p["arxiv_id"]] = label
+                kept_papers.append(p)
+            else:
+                dropped.add(p["arxiv_id"])
+                duplicates.append({"arxiv_id": p["arxiv_id"],
+                                   "kept_in": first, "dropped_from": label})
+        kept_versions = [v for v in scan["versions"] if v["arxiv_id"] not in dropped]
+        all_papers.extend(kept_papers)
+        all_versions.extend(kept_versions)
+        errors.extend({**e, "range": label} for e in scan["errors"]
+                      if e["arxiv_id"] not in dropped)
+        samples = select_samples(kept_papers, kept_versions)
+        covered = {r for s in samples for r in s["reasons"]}
+        ranges[label] = {
+            "meta": scan["meta"],
+            "summary": summarize(kept_papers, kept_versions),
+            "samples": samples,
+            "missing_sample_categories": [n for n, _ in _SAMPLE_RULES if n not in covered],
+        }
+
+    return {
+        "meta": {"ranges": labels, "n_duplicate_publications": len(duplicates)},
+        "overall": summarize(all_papers, all_versions),
+        "ranges": ranges,
+        "duplicates": duplicates,
+        "errors": errors,
+    }
+
+
+RATE_LABELS = {
+    "has_tex": "Version có TeX (extract ok)",
+    "no_tex": "Version không có TeX (NO_TEX_SOURCE)",
+    "download_not_ok": "Version tải không thành công",
+    "extract_failed": "Version giải nén lỗi",
+    "no_manifest": "Version thiếu manifest",
+    "multi_file": "Nhiều file .tex",
+    "uses_includes": "Dùng `\\input`/`\\include`",
+    "nested_includes_depth_ge2": "Include lồng nhau (độ sâu >= 2)",
+    "has_missing_includes": "Có include trỏ tới file không tồn tại",
+    "include_cycle": "Có vòng include",
+    "root_unique": "Đúng 1 root candidate",
+    "root_none": "Không có root candidate",
+    "root_multiple": "Nhiều root candidate",
+    "bib_files_kept": "Có file .bib trong source",
+    "bibitem_present": "Có `\\bibitem`/thebibliography trong .tex",
+    "bbl_present": "Có file .bbl",
+    "bbl_only_no_bib": "Có .bbl nhưng không có .bib",
+    "bbl_biblatex_style": "Có .bbl kiểu biblatex (`\\entry`)",
+    "bib_cmd_without_bib_file": "Gọi `\\bibliography` nhưng thiếu file .bib đã gọi",
+    "bib_cmd_no_recoverable_source":
+        "Gọi `\\bibliography` nhưng không có nguồn bibliography khôi phục được",
+    "no_bibliography_detected": "Không phát hiện bibliography nào",
+    "multi_version": "Publication có >= 2 version",
+    "version_mismatch": "Publication lệch version giữa metadata và thư mục",
+}
+_DIST_TITLES = {
+    "versions_per_paper": "Số version mỗi publication",
+    "root_candidates": "Số root candidate mỗi version có TeX (3 = từ 3 trở lên)",
+    "bib_format": "Định dạng bibliography (version có TeX)",
+    "source_format": "Định dạng source gốc (mọi version)",
+    "include_depth": "Độ sâu include (version có TeX)",
+}
+_STAT_TITLES = {
+    "tex_files_per_version": "Số file .tex mỗi version",
+    "source_files_per_version": "Số file source mỗi version",
+    "source_bytes_per_version": "Dung lượng source mỗi version (byte)",
+}
+
+
+def _pct(rate: dict) -> str:
+    return "n/a" if rate["rate"] is None else f"{100 * rate['rate']:.1f}%"
+
+
+def _cell(rate: dict) -> str:
+    return f"{rate['count']}/{rate['denominator']} ({_pct(rate)})"
+
+
+def _md_table(headers: list[str], rows: list[list]) -> list[str]:
+    out = ["| " + " | ".join(headers) + " |",
+           "|" + "|".join(":--" for _ in headers) + "|"]
+    out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
+    return out
+
+
+def render_report(merged: dict) -> str:
+    labels = merged["meta"]["ranges"]
+    overall, ranges = merged["overall"], merged["ranges"]
+    L: list[str] = ["# Báo cáo profiling M2 (TV3)", "",
+                    f"Các range: {', '.join(labels)}", ""]
+
+    L += ["## 1. Quy mô dữ liệu", ""]
+    rows = []
+    for label in labels:
+        c = ranges[label]["summary"]["counts"]
+        rows.append([label, f"{c['publications_found']}/{c['publications_requested']}",
+                     c["versions"], c["versions_with_tex"],
+                     _cell(ranges[label]["summary"]["rates"]["no_tex"])])
+    c = overall["counts"]
+    rows.append(["**Tổng**", f"{c['publications_found']}/{c['publications_requested']}",
+                 c["versions"], c["versions_with_tex"], _cell(overall["rates"]["no_tex"])])
+    L += _md_table(["Range", "Publication (tìm thấy/yêu cầu)", "Version",
+                    "Version có TeX", "Version không có TeX"], rows)
+    cats = ", ".join(f"{k}={v}" for k, v in c["categories"].items()) or "không có version"
+    L += ["", f"Phân loại version (tổng): {cats}.", ""]
+
+    L += ["## 2. Tỷ lệ (mỗi ô ghi số đếm/mẫu số)", ""]
+    rows = []
+    for key, rate in overall["rates"].items():
+        rows.append([RATE_LABELS.get(key, key), rate["denominator_desc"], _cell(rate)]
+                    + [_cell(ranges[lb]["summary"]["rates"][key]) for lb in labels])
+    L += _md_table(["Chỉ số", "Mẫu số", "Tổng"] + labels, rows) + [""]
+
+    L += ["## 3. Phân phối (tổng)", ""]
+    for key, dist in overall["distributions"].items():
+        L += [f"**{_DIST_TITLES.get(key, key)}**", ""]
+        L += (_md_table(["Giá trị", "Số lượng"], [[k, v] for k, v in dist.items()])
+              if dist else ["(không có dữ liệu)"])
+        L.append("")
+
+    L += ["## 4. Thống kê kích thước (version có TeX, tổng)", ""]
+    rows = []
+    for key, st in overall["stats"].items():
+        title = _STAT_TITLES.get(key, key)
+        rows.append([title] + ([st[k] for k in ("n", "min", "median", "mean", "p90", "max")]
+                               if st else ["-"] * 6))
+    L += _md_table(["Chỉ số", "n", "min", "median", "mean", "p90", "max"], rows) + [""]
+
+    L += ["## 5. Mẫu đại diện cho từng range", ""]
+    for label in labels:
+        L += [f"### {label}", ""]
+        samples = ranges[label]["samples"]
+        if samples:
+            L += [f"- `{s['arxiv_id']}` v{s['version']}: {', '.join(s['reasons'])}"
+                  for s in samples]
+        else:
+            L.append("(không có mẫu)")
+        missing = ranges[label]["missing_sample_categories"]
+        L += ["", "Chưa có mẫu cho loại: " + (", ".join(missing) if missing else "không (đã phủ đủ)"), ""]
+
+    L += ["## 6. Publication trùng giữa các range", ""]
+    dups = merged["duplicates"]
+    L += ([f"- `{d['arxiv_id']}`: giữ ở {d['kept_in']}, bỏ ở {d['dropped_from']}" for d in dups]
+          if dups else ["Không có."]) + [""]
+
+    L += ["## 7. Lỗi khi quét", ""]
+    errs = merged["errors"]
+    L += ([f"- [{e['range']}] `{e['arxiv_id']}`: {e['error']}" for e in errs[:50]]
+          if errs else ["Không có."])
+    if len(errs) > 50:
+        L.append(f"- ... và {len(errs) - 50} lỗi khác (xem profiling_summary.json)")
+    L.append("")
+
+    L += ["## 8. Ghi chú phương pháp và giới hạn", "",
+          "- Số liệu là profiling sơ bộ bằng regex trên các file .tex/.bib/.bbl còn lưu trong corpus M1; "
+          "không thay thế kết quả của parser cuối cùng.",
+          "- Mẫu số được ghi rõ ở từng dòng. Tỷ lệ no_tex tính trên tổng số version, "
+          "không phải trên số version có TeX.",
+          "- Root candidate là file .tex chứa `\\documentclass`. Độ sâu include được tính từ các root candidate; "
+          "nếu không có root thì từ các file không bị file nào include.",
+          "- Nếu M1 chưa giữ file .bbl thì các bài chỉ có .bbl sẽ nằm trong chỉ số "
+          "'không có nguồn bibliography khôi phục được'.",
+          "- Parser .bbl hiện chỉ hiểu `\\bibitem` (BibTeX); .bbl kiểu biblatex (`\\entry`) chỉ được đếm, chưa parse.",
+          "- Publication trùng ID giữa các range chỉ được tính một lần (range xuất hiện đầu tiên); "
+          "số liệu từng range và số liệu tổng đều tính sau khi loại trùng.",
+          ""]
+    return "\n".join(L)
+
+
+def _cmd_merge(args: argparse.Namespace) -> int:
+    try:
+        merged = merge_scans([_load_scan(Path(p)) for p in args.inputs])
+    except (OSError, ValueError) as exc:
+        print(f"merge failed: {exc}", file=sys.stderr)
+        return 2
+    Path(args.out_json).write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
+    Path(args.out_md).write_text(render_report(merged), encoding="utf-8")
+    c = merged["overall"]["counts"]
+    print(f"merged {len(args.inputs)} ranges: publications={c['publications_found']} "
+          f"versions={c['versions']} duplicates={len(merged['duplicates'])} "
+          f"-> {args.out_json}, {args.out_md}")
+    return 0
+
+
 def _cmd_scan(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir)
     ids = read_ids(Path(args.ids_file)) if args.ids_file else discover_ids(run_dir)
@@ -457,12 +673,20 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M2 source profiling (TV3)")
     sub = parser.add_subparsers(dest="command", required=True)
+
     scan = sub.add_parser("scan", help="profile one arXiv-ID range")
     scan.add_argument("--run-dir", required=True)
     scan.add_argument("--ids-file", help="one base arXiv id per line; default: all papers in run")
     scan.add_argument("--label", required=True)
     scan.add_argument("--out", required=True)
     scan.set_defaults(func=_cmd_scan)
+
+    merge = sub.add_parser("merge", help="merge range scans into summary + report")
+    merge.add_argument("--inputs", nargs="+", required=True, help="scan JSON files")
+    merge.add_argument("--out-json", required=True)
+    merge.add_argument("--out-md", required=True)
+    merge.set_defaults(func=_cmd_merge)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     return args.func(args)
