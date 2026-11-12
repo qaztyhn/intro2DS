@@ -2,6 +2,8 @@ from src.parsing.bibliography import (
     clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography,
 )
 from src.parsing.contracts import BibEntry, GatheredDocument
+from pathlib import Path
+
 
 def test_basic_article():
     entries, warns = parse_bib("""
@@ -300,3 +302,87 @@ def test_unify_deterministic():
             2: [_e("b", "Two Title", year="2019"), _e("c", "One Title")]}
     r1, r2 = unify_bibliography("x", data), unify_bibliography("x", data)
     assert r1.entries == r2.entries and r1.key_mapping == r2.key_mapping
+
+
+# ---------------------------------------------------------------------------
+# Fixture-driven tests
+# ---------------------------------------------------------------------------
+FIXTURES = Path(__file__).parent / "fixtures"
+PUB = "2501.00001"
+
+
+def load_doc(directory: Path, version: int = 1) -> GatheredDocument:
+    main = directory / "main.tex"
+    latex = main.read_text(encoding="utf-8") if main.exists() else ""
+    bib_files = {p.name: p.read_text(encoding="utf-8")
+                 for p in sorted(directory.glob("*.bib"))}
+    return GatheredDocument(PUB, version, "main.tex", latex, ["main.tex"],
+                            bib_files, "ok")
+
+
+def load_versions(name: str) -> dict[int, GatheredDocument]:
+    base = FIXTURES / name
+    return {int(p.name[1:]): load_doc(p, int(p.name[1:]))
+            for p in sorted(base.glob("v[0-9]*"))}
+
+
+def unify_fixture(name: str):
+    docs = load_versions(name)
+    return unify_bibliography(
+        PUB, {v: extract_bibliography(d) for v, d in docs.items()})
+
+
+def test_fixture_bib_file():
+    entries = extract_bibliography(load_doc(FIXTURES / "bibliography_bib"))
+    assert [e.original_key for e in entries] == [
+        "smith2020deep", "lee2019attn", "web2021"]
+    s, lee, web = (e.fields for e in entries)
+    assert s["title"] == "Deep Learning for Graphs"
+    assert s["authors"] == ["John Smith", "Anna Müller"]
+    assert s["year"] == 2020
+    assert s["doi"] == "10.1000/deep.1"
+    assert s["journal"] == "Nature"
+    assert entries[1].entry_type == "inproceedings"
+    assert lee["title"] == "Attention is not enough"
+    assert lee["booktitle"] == "Proc. of Advances in Neural Information Processing Systems"
+    assert lee["month"] == "June" and lee["year"] == 2019
+    assert web["url"] == "https://example.org/proj_page"
+    assert web["authors"] == [] and web["year"] is None
+
+
+def test_fixture_bibitem():
+    entries = extract_bibliography(load_doc(FIXTURES / "bibliography_bibitem"))
+    assert [e.original_key for e in entries] == ["smith2020", "manual"]
+    assert entries[0].fields["authors"] == ["J. Smith", "A. Doe"]
+    assert entries[0].fields["year"] == 2020
+    assert entries[1].fields["eprint"] == "2012.12345"
+    assert entries[1].fields["year"] == 2021
+
+
+def test_fixture_citation_conflict():
+    r = unify_fixture("citation_conflict")
+    assert [e.original_key for e in r.entries] == ["foo", "renamed_old", "foo_2"]
+    assert r.key_mapping == {
+        1: {"foo": "foo", "renamed_old": "renamed_old"},
+        2: {"foo": "foo_2", "renamed_new": "renamed_old"},
+    }
+    assert r.entries[1].fields["journal"] == "JMLR"
+    assert any("foo" in w for w in r.warnings)
+
+
+def test_fixture_multi_version():
+    docs = load_versions("multi_version")
+    assert sorted(docs) == [1, 2, 3]
+    r = unify_fixture("multi_version")
+    assert [e.original_key for e in r.entries] == ["a", "b", "c"]
+    a = r.entries[0]
+    assert a.entry_type == "article"
+    assert a.fields["doi"] == "10.1000/gn.1" and a.fields["journal"] == "JMLR"
+    assert a.fields["source_keys"] == {1: ["a"], 2: ["a"]}
+    assert r.entries[1].entry_type == "book"
+    assert r.key_mapping == {
+        1: {"a": "a", "b": "b"},
+        2: {"a": "a", "b": "b", "c": "c"},
+        3: {},
+    }
+    assert r.warnings == []
