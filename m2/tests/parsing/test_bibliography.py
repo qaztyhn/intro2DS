@@ -1,4 +1,4 @@
-from src.parsing.bibliography import extract_bibliography, parse_bib
+from src.parsing.bibliography import extract_bibliography, parse_bib, parse_bibitems
 from src.parsing.contracts import GatheredDocument
 
 
