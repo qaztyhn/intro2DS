@@ -9,6 +9,7 @@ import logging
 import re
 import unicodedata
 
+from typing import NamedTuple
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
 
 log = logging.getLogger(__name__)
@@ -450,4 +451,210 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
         original_key=entry.original_key,
         entry_type=_TYPE_ALIAS.get(etype, etype),
         fields=f,
+    )
+
+# --------------------------------------------------------------------------
+# Cross-version unification
+# --------------------------------------------------------------------------
+_ARXIV_URL = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Za-z]{2})?/\d{7})",
+    re.I,
+)
+_ARXIV_ID = re.compile(
+    r"(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Za-z]{2})?/\d{7})(?:v\d+)?", re.I
+)
+_CANON_FIELDS = ("title", "authors", "year", "doi", "journal", "url")
+_QUIET_FIELDS = {"raw", "label"}
+
+
+class _Sig(NamedTuple):
+    doi: str | None
+    eprint: str | None
+    title: str
+    author: str
+    year: int | None
+    raw: str
+
+
+def _fold(s: object) -> str:
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
+
+
+def _alnum(s: object) -> str:
+    return re.sub(r"[^0-9a-z]+", "", _fold(s))
+
+
+def _eprint(f: dict) -> str | None:
+    v = re.sub(r"^arxiv\s*:\s*", "", str(f.get("eprint") or "").strip(), flags=re.I)
+    m = _ARXIV_ID.fullmatch(v)
+    if m:
+        return m.group(1).lower()
+    for src in (f.get("url"), f.get("journal")):
+        s = str(src or "")
+        m = _ARXIV_URL.search(s) or _ARXIV.search(s)
+        if m:
+            return m.group(1).lower()
+    return None
+
+
+def _signature(f: dict) -> _Sig:
+    authors = f.get("authors") or []
+    last = authors[0].split()[-1] if authors and authors[0].split() else ""
+    return _Sig(
+        doi=f.get("doi") or None,
+        eprint=_eprint(f),
+        title=_alnum(f.get("title")),
+        author=_alnum(last),
+        year=f.get("year") if isinstance(f.get("year"), int) else None,
+        raw=_alnum(f.get("raw")),
+    )
+
+
+def _index_keys(sig: _Sig) -> list[tuple[str, object]]:
+    keys: list[tuple[str, object]] = []
+    if sig.doi:
+        keys.append(("doi", sig.doi))
+    if sig.eprint:
+        keys.append(("eprint", sig.eprint))
+    if sig.title:
+        keys.append(("title", sig.title))
+    if sig.raw:
+        keys.append(("raw", sig.raw))
+    return keys
+
+
+def _match(a: _Sig, b: _Sig) -> bool:
+    if a.doi and b.doi:
+        return a.doi == b.doi
+    if a.eprint and b.eprint:
+        return a.eprint == b.eprint
+    if a.title and b.title:
+        if a.title != b.title:
+            return False
+        if a.year and b.year and a.year != b.year:
+            return False
+        if a.author and b.author and a.author != b.author:
+            return False
+        return True
+    return bool(a.raw and b.raw and a.raw == b.raw)
+
+
+def _is_empty(v: object) -> bool:
+    return v is None or v == "" or v == []
+
+
+def _fallback_key(fields: dict) -> str:
+    authors = fields.get("authors") or []
+    last = _alnum(authors[0].split()[-1]) if authors and authors[0].split() else ""
+    year = str(fields["year"]) if fields.get("year") else ""
+    m = re.search(r"[0-9a-z]+", _fold(fields.get("title")))
+    return f"{last}{year}{m.group(0) if m else ''}" or "ref"
+
+
+def _merge_cluster(members: list, warnings: list[str], tag: str) -> tuple[str, dict]:
+    fields: dict[str, object] = {}
+    etype = "misc"
+    for ver, entry, _ in members:
+        if entry.entry_type and entry.entry_type != "misc":
+            etype = entry.entry_type
+        for name, value in entry.fields.items():
+            if _is_empty(value):
+                continue
+            value = list(value) if isinstance(value, list) else value
+            if name in fields and fields[name] != value and name in _CANON_FIELDS:
+                warnings.append(
+                    f"{tag} stage=bib_unify v{ver}: conflicting '{name}' for key "
+                    f"'{entry.original_key}'; kept value of the latest version")
+            fields[name] = value
+    for name, default in (("title", None), ("authors", []), ("year", None),
+                          ("doi", None), ("journal", None), ("url", None)):
+        fields.setdefault(name, default)
+    source_keys: dict[int, list[str]] = {}
+    for ver, entry, _ in members:
+        keys = source_keys.setdefault(ver, [])
+        if entry.original_key and entry.original_key not in keys:
+            keys.append(entry.original_key)
+    fields["source_keys"] = source_keys
+    return etype, fields
+
+
+def unify_bibliography(
+    arxiv_id: str, entries_by_version: dict[int, list[BibEntry]],
+) -> BibliographyResult:
+    """Merge the bibliographies of all versions of one publication."""
+    tag = f"[{arxiv_id}]"
+    warnings: list[str] = []
+    versions = sorted(entries_by_version)
+
+    clusters: list[list[tuple[int, BibEntry, _Sig]]] = []
+    index: dict[tuple[str, object], list[int]] = {}
+    for ver in versions:
+        for raw_entry in entries_by_version[ver]:
+            entry = normalize_entry(raw_entry)
+            sig = _signature(entry.fields)
+            candidates = sorted({ci for k in _index_keys(sig) for ci in index.get(k, [])})
+            target = None
+            for ci in candidates:
+                members = clusters[ci]
+                if any(sig.doi and m[2].doi and sig.doi != m[2].doi for m in members):
+                    continue
+                if any(_match(sig, m[2]) for m in members):
+                    target = ci
+                    break
+            if target is None:
+                target = len(clusters)
+                clusters.append([])
+            clusters[target].append((ver, entry, sig))
+            for k in _index_keys(sig):
+                ids = index.setdefault(k, [])
+                if target not in ids:
+                    ids.append(target)
+
+    merged = [_merge_cluster(c, warnings, tag) for c in clusters]
+
+    used: set[str] = set()
+    canon_keys: list[str] = []
+    for members, (_, fields) in zip(clusters, merged):
+        candidates: list[str] = []
+        for _, e, _ in members:
+            if e.original_key and e.original_key not in candidates:
+                candidates.append(e.original_key)
+        key = next((k for k in candidates if k.casefold() not in used), None)
+        if key is None:
+            base = candidates[0] if candidates else _fallback_key(fields)
+            key, n = base, 2
+            while key.casefold() in used:
+                key = f"{base}_{n}"
+                n += 1
+        if candidates and key != candidates[0]:
+            warnings.append(
+                f"{tag} stage=bib_unify: key '{candidates[0]}' already used by a "
+                f"different entry; canonical key '{key}' assigned")
+        used.add(key.casefold())
+        canon_keys.append(key)
+
+    mapping: dict[int, dict[str, str]] = {v: {} for v in versions}
+    for members, canon in zip(clusters, canon_keys):
+        for ver, e, _ in members:
+            old = e.original_key
+            if not old:
+                warnings.append(
+                    f"{tag} stage=bib_unify v{ver}: entry without citation key; "
+                    f"canonical key '{canon}' generated (not citable)")
+                continue
+            prev = mapping[ver].get(old)
+            if prev is None:
+                mapping[ver][old] = canon
+            elif prev != canon:
+                warnings.append(
+                    f"{tag} stage=bib_unify v{ver}: key '{old}' defined twice with "
+                    f"different content; mapping keeps '{prev}'")
+
+    entries = [
+        BibEntry(original_key=key, entry_type=etype, fields=fields)
+        for key, (etype, fields) in zip(canon_keys, merged)
+    ]
+    return BibliographyResult(
+        arxiv_id=arxiv_id, entries=entries, key_mapping=mapping, warnings=warnings,
     )
