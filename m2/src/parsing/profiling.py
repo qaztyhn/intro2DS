@@ -34,6 +34,7 @@ _BIBLIOGRAPHY = re.compile(r"\\bibliography\s*\{([^{}]*)\}")
 _ADDBIB = re.compile(r"\\addbibresource(?:\[[^\]]*\])?\s*\{([^{}]*)\}")
 _THEBIB = re.compile(r"\\begin\s*\{thebibliography\}")
 _BIBITEM = re.compile(r"\\bibitem\b")
+_BBL_ENTRY = re.compile(r"\\entry\s*\{")  # biblatex/biber .bbl style
 
 
 def paper_key(arxiv_id: str) -> str:
@@ -119,8 +120,9 @@ def _blank_record(arxiv_id: str, version: int) -> dict:
         "arxiv_id": arxiv_id, "version": version, "category": "no_manifest",
         "download_status": None, "extract_status": None, "source_format": None,
         "error_code": None, "has_tex": False, "n_source_files": 0, "n_tex": 0,
-        "n_bib": 0, "n_other": 0, "listed_files_missing": 0, "tex_bytes": 0,
-        "bib_bytes": 0, "multi_file": False, "n_root_candidates": 0,
+        "n_bib": 0, "n_bbl": 0, "n_bbl_biblatex": 0, "n_other": 0,
+        "listed_files_missing": 0, "tex_bytes": 0, "bib_bytes": 0,
+        "bbl_bytes": 0, "multi_file": False, "n_root_candidates": 0,
         "n_include_cmds": 0, "missing_includes": [], "max_include_depth": 0,
         "include_cycle": False, "n_bibitem": 0, "n_thebibliography": 0,
         "bibliography_cmd": False, "missing_bib_files": [],
@@ -160,9 +162,10 @@ def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
     source_dir = vdir / "source"
     tex: dict[str, str] = {}
     bib: dict[str, str] = {}
+    bbl: dict[str, str] = {}
     for rel in listed:
         ext = PurePosixPath(rel).suffix.lower() if isinstance(rel, str) else ""
-        if ext not in (".tex", ".bib"):
+        if ext not in (".tex", ".bib", ".bbl"):
             if isinstance(rel, str):
                 rec["n_other"] += 1
             else:
@@ -176,11 +179,15 @@ def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
         if ext == ".tex":
             tex[rel] = _COMMENT.sub("", text)
             rec["tex_bytes"] += size
-        else:
+        elif ext == ".bib":
             bib[rel] = text
             rec["bib_bytes"] += size
+        else:
+            bbl[rel] = text
+            rec["bbl_bytes"] += size
 
-    rec["n_tex"], rec["n_bib"] = len(tex), len(bib)
+    rec["n_tex"], rec["n_bib"], rec["n_bbl"] = len(tex), len(bib), len(bbl)
+    rec["n_bbl_biblatex"] = sum(1 for t in bbl.values() if _BBL_ENTRY.search(t))
     rec["has_tex"] = rec["category"] == "has_tex" and bool(tex)
     if rec["category"] == "has_tex" and not tex:
         rec["notes"].append("extract_status ok but no readable .tex file")
@@ -227,10 +234,14 @@ def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
         if not cands & kept:
             rec["missing_bib_files"].append(name)
 
-    has_bib = rec["n_bib"] > 0
-    has_item = rec["n_bibitem"] > 0 or rec["n_thebibliography"] > 0
-    rec["bib_format"] = ("both" if has_bib and has_item else "bib" if has_bib
-                         else "bibitem" if has_item else "none")
+    parts = []
+    if rec["n_bib"] > 0:
+        parts.append("bib")
+    if rec["n_bbl"] > 0:
+        parts.append("bbl")
+    if rec["n_bibitem"] > 0 or rec["n_thebibliography"] > 0:
+        parts.append("bibitem")
+    rec["bib_format"] = "+".join(parts) if parts else "none"
     return rec
 
 
@@ -314,6 +325,11 @@ def summarize(papers: list[dict], versions: list[dict]) -> dict:
         "root_multiple": _rate(cnt(tex, lambda v: v["n_root_candidates"] > 1), nt, TEX),
         "bib_files_kept": _rate(cnt(tex, lambda v: v["n_bib"] > 0), nt, TEX),
         "bibitem_present": _rate(cnt(tex, lambda v: v["n_bibitem"] > 0 or v["n_thebibliography"] > 0), nt, TEX),
+        "bbl_present": _rate(cnt(tex, lambda v: v["n_bbl"] > 0), nt, TEX),
+        "bbl_only_no_bib": _rate(cnt(tex, lambda v: v["n_bbl"] > 0 and v["n_bib"] == 0), nt, TEX),
+        "bbl_biblatex_style": _rate(cnt(tex, lambda v: v["n_bbl_biblatex"] > 0), nt, TEX),
+        "bib_cmd_no_recoverable_source": _rate(
+            cnt(tex, lambda v: v["bibliography_cmd"] and v["bib_format"] == "none"), nt, TEX),
         "bib_cmd_without_bib_file": _rate(cnt(tex, lambda v: bool(v["missing_bib_files"])), nt, TEX),
         "no_bibliography_detected": _rate(cnt(tex, lambda v: v["bib_format"] == "none"), nt, TEX),
         "multi_version": _rate(cnt(ok_papers, lambda p: p["n_versions"] >= 2), npub, PUB),
@@ -352,6 +368,7 @@ _SAMPLE_RULES = [
     ("no_tex", lambda r, p: r["category"] == "no_tex"),
     ("bib_file", lambda r, p: r["n_bib"] > 0),
     ("bibitem", lambda r, p: r["n_bibitem"] > 0),
+    ("bbl", lambda r, p: r["n_bbl"] > 0),
     ("root_ambiguity", lambda r, p: r["has_tex"] and r["n_root_candidates"] != 1),
     ("missing_include", lambda r, p: bool(r["missing_includes"])),
 ]

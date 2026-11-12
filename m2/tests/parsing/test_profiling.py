@@ -138,3 +138,30 @@ def test_cli_scan_is_deterministic(tmp_path):
         outs.append(data)
     assert outs[0] == outs[1]
     assert outs[0]["summary"]["counts"]["publications_requested"] == 1
+
+
+def test_bbl_counted_and_biblatex_detected(tmp_path):
+    make_paper(tmp_path, "2501.00020", {
+        1: {"files": {
+            "main.tex": r"\documentclass{article}\bibliography{refs}",
+            "refs.bbl": r"\begin{thebibliography}{1}\bibitem{k} Foo 2020.\end{thebibliography}",
+        }},
+        2: {"files": {
+            "main.tex": r"\documentclass{article}\bibliography{refs}",
+            "refs.bbl": r"\entry{k}{article}{}",
+        }},
+    })
+    r1, r2 = P.profile_paper(tmp_path, "2501.00020")[1]
+    assert (r1["n_bbl"], r1["n_bib"], r1["bib_format"]) == (1, 0, "bbl")
+    assert r1["n_bbl_biblatex"] == 0
+    assert r2["n_bbl_biblatex"] == 1 and r2["n_other"] == 0
+
+
+def test_unrecoverable_bibliography_rate(tmp_path):
+    make_paper(tmp_path, "2501.00021", {1: {"files": {
+        "main.tex": r"\documentclass{article}\bibliography{refs}"}}})
+    make_paper(tmp_path, "2501.00022", {1: SINGLE})
+    s = P.scan_range(tmp_path, ["2501.00021", "2501.00022"], "t")["summary"]
+    rate = s["rates"]["bib_cmd_no_recoverable_source"]
+    assert (rate["count"], rate["denominator"]) == (1, 2)
+    assert s["rates"]["bbl_present"]["count"] == 0
