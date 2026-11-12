@@ -5,6 +5,9 @@ from src.parsing.contracts import BibEntry, GatheredDocument
 from pathlib import Path
 
 
+import inspect
+
+
 def test_basic_article():
     entries, warns = parse_bib("""
     @Article{smith2020,
@@ -386,3 +389,45 @@ def test_fixture_multi_version():
         3: {},
     }
     assert r.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Contract / robustness tests
+# ---------------------------------------------------------------------------
+def test_public_signatures_match_contract():
+    assert list(inspect.signature(extract_bibliography).parameters) == ["document"]
+    assert list(inspect.signature(unify_bibliography).parameters) == [
+        "arxiv_id", "entries_by_version"]
+
+
+def test_unify_empty_inputs():
+    r = unify_bibliography("x", {})
+    assert r.entries == [] and r.key_mapping == {} and r.warnings == []
+
+
+def test_unify_ignores_dict_order():
+    a = {1: [_e("a", "One Title")], 2: [_e("a", "One Title", doi="10.1000/x")]}
+    b = {2: a[2], 1: a[1]}
+    assert unify_bibliography("x", a) == unify_bibliography("x", b)
+
+
+def test_parse_bib_never_raises_on_garbage():
+    for text in ["", "@", "@article{", "@article{k, title = {", "@string{x}",
+                 "@article{k, =x}", "}}}}", '@article{k, title = "unterminated}',
+                 "@comment{unclosed"]:
+        entries, warns = parse_bib(text)
+        assert isinstance(entries, list) and isinstance(warns, list)
+
+
+def test_parse_bibitems_never_raises_on_garbage():
+    for text in ["", "\\bibitem", "\\bibitem{", "\\bibitem[{x}", "\\bibitem{a}"]:
+        entries, warns = parse_bibitems(text)
+        assert isinstance(entries, list) and isinstance(warns, list)
+
+
+def test_normalize_weird_values_never_raises():
+    e = BibEntry("k", "misc", {"title": None, "author": "{", "year": "abc",
+                               "doi": "nope", "url": "{{"})
+    f = normalize_entry(e).fields
+    assert f["title"] is None and f["authors"] == []
+    assert f["year"] is None and f["doi"] is None and f["url"] is None
