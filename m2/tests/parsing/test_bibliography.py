@@ -1,5 +1,5 @@
 from src.parsing.bibliography import (
-    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems,
+    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography,
 )
 from src.parsing.contracts import BibEntry, GatheredDocument
 
@@ -195,3 +195,108 @@ def test_normalize_is_idempotent():
     e = BibEntry("k", "article", {"title": "{A} B", "author": "Doe, Jane", "year": "2001"})
     once = normalize_entry(e)
     assert normalize_entry(once).fields == once.fields
+
+
+def _e(key, title, author="Smith, John", year="2020", etype="article", **extra):
+    fields = {"title": title, "author": author, "year": year, **extra}
+    return BibEntry(key, etype, fields)
+
+
+def test_unify_same_entry_same_key():
+    r = unify_bibliography("x", {1: [_e("a", "Deep Learning")],
+                                 2: [_e("a", "Deep Learning")]})
+    assert len(r.entries) == 1
+    assert r.key_mapping == {1: {"a": "a"}, 2: {"a": "a"}}
+    assert r.warnings == []
+
+
+def test_unify_renamed_key_by_doi():
+    r = unify_bibliography("x", {
+        1: [_e("k1", "Deep Learning", doi="10.1000/abc")],
+        2: [_e("k1b", "Deep Learning", doi="10.1000/abc")],
+    })
+    assert len(r.entries) == 1
+    assert r.entries[0].original_key == "k1"
+    assert r.key_mapping[2]["k1b"] == "k1"
+    assert r.entries[0].fields["source_keys"] == {1: ["k1"], 2: ["k1b"]}
+
+
+def test_unify_same_key_different_paper():
+    r = unify_bibliography("x", {
+        1: [_e("foo", "Alpha Paper Title")],
+        2: [_e("foo", "Beta Different Work", author="Jones, Ann", year="2021")],
+    })
+    assert [e.original_key for e in r.entries] == ["foo", "foo_2"]
+    assert r.key_mapping[1]["foo"] == "foo"
+    assert r.key_mapping[2]["foo"] == "foo_2"
+    assert r.warnings
+
+
+def test_unify_merges_additional_fields():
+    r = unify_bibliography("x", {
+        1: [_e("a", "Deep Learning")],
+        2: [_e("a", "Deep Learning", doi="10.1000/abc", journal="Nature")],
+    })
+    f = r.entries[0].fields
+    assert len(r.entries) == 1
+    assert f["doi"] == "10.1000/abc" and f["journal"] == "Nature"
+    assert r.warnings == []
+
+
+def test_unify_different_doi_not_merged():
+    r = unify_bibliography("x", {
+        1: [_e("a", "Same Title", doi="10.1000/aaa")],
+        2: [_e("b", "Same Title", doi="10.1000/bbb")],
+    })
+    assert [e.original_key for e in r.entries] == ["a", "b"]
+
+
+def test_unify_different_year_not_merged():
+    r = unify_bibliography("x", {
+        1: [_e("a", "Same Title", year="2020")],
+        2: [_e("b", "Same Title", year="2021")],
+    })
+    assert len(r.entries) == 2
+
+
+def test_unify_conflicting_field_keeps_latest_and_warns():
+    r = unify_bibliography("x", {
+        1: [_e("a", "T Title", doi="10.1000/abc", journal="Nature")],
+        2: [_e("a", "T Title", doi="10.1000/abc", journal="Science")],
+    })
+    assert len(r.entries) == 1
+    assert r.entries[0].fields["journal"] == "Science"
+    assert any("journal" in w for w in r.warnings)
+
+
+def test_unify_bibitem_across_versions():
+    v1, _ = parse_bibitems(SAMPLE_BBL)
+    v2, _ = parse_bibitems(SAMPLE_BBL)
+    r = unify_bibliography("x", {1: v1, 2: v2})
+    assert len(r.entries) == 2
+    assert r.key_mapping[2] == {"smith2020": "smith2020", "b": "b"}
+
+
+def test_unify_duplicate_inside_version():
+    r = unify_bibliography("x", {1: [
+        _e("a", "Dup Title", doi="10.1000/abc"),
+        _e("a_dup", "Dup Title", doi="10.1000/abc"),
+    ]})
+    assert len(r.entries) == 1
+    assert r.key_mapping[1] == {"a": "a", "a_dup": "a"}
+
+
+def test_unify_empty_version_and_missing_key():
+    r = unify_bibliography("x", {1: [], 2: [_e("k", "Some Title Here")]})
+    assert r.key_mapping == {1: {}, 2: {"k": "k"}}
+    r2 = unify_bibliography("x", {1: [_e("", "Deep Learning")]})
+    assert r2.entries[0].original_key == "smith2020deep"
+    assert r2.key_mapping == {1: {}}
+    assert r2.warnings
+
+
+def test_unify_deterministic():
+    data = {1: [_e("a", "One Title"), _e("b", "Two Title", year="2019")],
+            2: [_e("b", "Two Title", year="2019"), _e("c", "One Title")]}
+    r1, r2 = unify_bibliography("x", data), unify_bibliography("x", data)
+    assert r1.entries == r2.entries and r1.key_mapping == r2.key_mapping
