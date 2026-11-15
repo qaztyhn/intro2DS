@@ -19,7 +19,7 @@ Tests: `m2/tests/parsing/test_bibliography.py`, `test_profiling.py`, fixtures tr
 ## 2. API
 
 ```python
-from src.parsing.bibliography import extract_bibliography, unify_bibliography
+from m2.src.parsing.bibliography import extract_bibliography, unify_bibliography
 
 extract_bibliography(document: GatheredDocument) -> list[BibEntry]
 unify_bibliography(arxiv_id: str, entries_by_version: dict[int, list[BibEntry]]) -> BibliographyResult
@@ -90,16 +90,16 @@ Các field khác không đưa vào bảng.
 
 ## 6. Việc còn lại (chưa làm)
 
-Chạy profiling trên corpus M1 thật. Mỗi thành viên chạy trên máy có corpus của mình, từ thư mục `m2/`:
+Chạy profiling trên corpus M1 thật. Mỗi thành viên chạy trên máy có corpus của mình, từ thư mục `<repository root>/`:
 
 ```bash
-python -m src.parsing.profiling scan --run-dir <run_dir> --ids-file <ids_file> --label tv1 --out profiling_tv1.json
+python -m m2.src.parsing.profiling scan --run-dir <run_dir> --ids-file <ids_file> --label tv1 --out profiling_tv1.json
 ```
 
 (`--label` lần lượt là `tv1`, `tv2`, `tv3`, `tv4`; `<run_dir>` là thư mục chứa `papers/`.) TV3 gom bốn file JSON và chạy:
 
 ```bash
-python -m src.parsing.profiling merge --inputs profiling_tv1.json profiling_tv2.json profiling_tv3.json profiling_tv4.json --out-json profiling_summary.json --out-md profiling_report.md
+python -m m2.src.parsing.profiling merge --inputs profiling_tv1.json profiling_tv2.json profiling_tv3.json profiling_tv4.json --out-json profiling_summary.json --out-md profiling_report.md
 ```
 
 Chỉ commit `profiling_summary.json` và `profiling_report.md`. Không commit các file `profiling_tv*.json` (có danh sách từng version, khá lớn). Các chỉ số liên quan `.bbl` (`bbl_present`, `bbl_only_no_bib`, `bib_cmd_no_recoverable_source`) sẽ cho biết quy mô thiệt hại của vấn đề ở mục 5.
@@ -116,5 +116,5 @@ Chỉ commit `profiling_summary.json` và `profiling_report.md`. Không commit c
 ## 8. Chạy test
 
 ```bash
-cd m2 && python -m pytest tests/parsing -q
+python -m pytest m2/tests/parsing -q
 ```

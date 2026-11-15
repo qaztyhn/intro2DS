@@ -1,6 +1,6 @@
 """TV4 — write the three M2 tables (plus an internal ordering table) as Parquet.
 
-Schemas follow ``docs/m2/tv4_decisions.md`` D9. Output is deterministic: rows are
+Schemas follow ``m2/docs/decisions/dedup_export.md`` D9. Output is deterministic: rows are
 sorted, compression/row-group/format are fixed and no timestamp is written, so
 the same rows give byte-identical files (for the same pyarrow version, which is
 recorded by Parquet in ``created_by``).
@@ -29,7 +29,7 @@ from typing import Any, Iterable, Sequence
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..utils.common import paper_key
+from m1.src.utils.common import paper_key
 
 _DICT = pa.dictionary(pa.int32(), pa.string())
 
@@ -135,7 +135,10 @@ def _type_ok(value: Any, arrow_type: pa.DataType) -> bool:
     """Exact Python types only: pyarrow would silently split 'Ada' into characters for
     list<string> and truncate 2020.5 to 2020, so it is not trusted to validate."""
     if pa.types.is_integer(arrow_type):
-        return type(value) is int
+        bits = arrow_type.bit_width
+        lower = -(1 << (bits - 1)) if pa.types.is_signed_integer(arrow_type) else 0
+        upper = (1 << (bits - (1 if pa.types.is_signed_integer(arrow_type) else 0))) - 1
+        return type(value) is int and lower <= value <= upper
     if pa.types.is_string(arrow_type):
         return isinstance(value, str)
     if pa.types.is_dictionary(arrow_type):

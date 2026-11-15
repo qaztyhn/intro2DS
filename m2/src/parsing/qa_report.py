@@ -39,7 +39,7 @@ import pyarrow.parquet as pq
 from . import validation
 
 STATUSES = ("ok", "partial", "no_tex", "failed", "skipped")
-EXPORTED_STATUSES = ("ok", "partial", "no_tex")  # statuses that leave a root in the tables
+EXPORTED_STATUSES = ("ok", "partial")  # no_tex stays in QA, never parsed elements
 REPORT_NAME = "qa_report.json"
 MAX_FAILURE_EXAMPLES = 200
 
@@ -213,7 +213,7 @@ def _version_section(rows: list[dict[str, Any]], tables: dict[str, Any]) -> dict
             "examples_missing": [list(x) for x in missing[:20]],
             "examples_unexpected": [list(x) for x in unexpected[:20]],
             "definition": "tables hold a root element for every version whose status is "
-                          "ok, partial or no_tex, and for no other version"},
+                          "ok or partial, and for no other version; no_tex stays in QA"},
     }
 
 

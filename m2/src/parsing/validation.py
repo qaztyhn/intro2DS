@@ -1,7 +1,7 @@
 """TV4 — validate exported M2 tables, independently of the code that wrote them.
 
 Everything is read from the Parquet files in ``output_dir``. The expected schema is
-declared here on purpose (docs/m2/tv4_decisions.md D9, Contract §2.4) and is NOT
+declared here on purpose (m2/docs/decisions/dedup_export.md D9, Contract §2.4) and is NOT
 imported from ``export.py``, so a mistake in the exporter cannot validate itself.
 
 Memory: each table is read column-wise (``content`` is only streamed in batches),
@@ -29,7 +29,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from ..utils.common import paper_key
+from m1.src.utils.common import paper_key
 
 MAX_EXAMPLES = 50
 BATCH_ROWS = 65536

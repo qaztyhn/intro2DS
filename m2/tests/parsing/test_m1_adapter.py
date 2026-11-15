@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.parsing.m1_adapter import load_versions, M1AdapterError
+from m2.src.parsing.m1_adapter import load_versions, M1AdapterError
 
 
 ID = '2507.01659'

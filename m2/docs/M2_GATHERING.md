@@ -1,20 +1,20 @@
 # M2 TV1 — M1 adapter and multifile gathering
 
-This branch implements only the shared team dataclasses, M1 version adapter and source gathering. TV2 hierarchy/normalization, TV3 bibliography standardization, TV4 element deduplication/export and full-corpus orchestration are deliberately deferred until the owners integrate. No crawler stages, M1 files, or notebook are modified.
+This document describes the adapter and source gathering component. On `m2-integration`, the four components are connected by `pipeline.py` and `cli.py`; see `INTEGRATION.md` for execution, integration decisions and remaining validation. No crawler stages, M1 data, or notebook are modified.
 
 ## Public interfaces
 
 ```python
 from pathlib import Path
-from src.parsing.m1_adapter import load_versions
-from src.parsing.gathering import gather_source
+from m2.src.parsing.m1_adapter import load_versions
+from m2.src.parsing.gathering import gather_source
 
 # Definitions, not a command to run the corpus:
 # load_versions(run_dir: Path, arxiv_id: str) -> list[SourceVersion]
 # gather_source(source: SourceVersion) -> GatheredDocument
 ```
 
-`src/parsing/contracts.py` follows the supplied team contract exactly: `SourceVersion`, `GatheredDocument`, `ParsedNode`, `ParsedDocument`, `BibEntry`, and `BibliographyResult`. SourceVersion is frozen. No additional public fields, final table columns, or element IDs are introduced. Share this module with TV2–TV4 before integration.
+`m2/src/parsing/contracts.py` follows the supplied team contract exactly: `SourceVersion`, `GatheredDocument`, `ParsedNode`, `ParsedDocument`, `BibEntry`, and `BibliographyResult`. SourceVersion is frozen. No additional public fields, final table columns, or element IDs are introduced. Share this module with TV2–TV4 before integration.
 
 ## M1 adapter
 
@@ -56,9 +56,9 @@ UTF-8/BOM is preferred. UTF-16 BOM and byte-preserving Latin-1 fallback are expl
 ## Tests only — no corpus processing
 
 ```powershell
-.venv\Scripts\python.exe -B -m pytest tests/parsing -q -p no:cacheprovider
+.venv\Scripts\python.exe -B -m pytest m2/tests/parsing -q -p no:cacheprovider
 ```
 
-Fixtures under `tests/parsing/fixtures/` are synthetic, including single-file, multifile and nested include layouts. The existing synthetic M1 fixture supplies a multiversion TeX/PDF-only adapter integration case. Tests also cover comments/literals, repeated includes, missing files/cycles, relative/unsafe/ambiguous paths, bibliography selection, conditional/macro limits, encoding, no-TeX, schema failures, and immutable inputs.
+Fixtures under `m2/tests/parsing/fixtures/` are synthetic, including single-file, multifile and nested include layouts. The existing synthetic M1 fixture supplies a multiversion TeX/PDF-only adapter integration case. Tests also cover comments/literals, repeated includes, missing files/cycles, relative/unsafe/ambiguous paths, bibliography selection, conditional/macro limits, encoding, no-TeX, schema failures, and immutable inputs.
 
-Tests do not call APIs, compile LaTeX, crawl, or process the real 24120046/other members' corpora. No corpus runner or production TV2–TV4 integration is shipped in this step. Later TV1 orchestration should process a whole publication's versions together, catch publication-level adapter errors, preserve each version's status and warnings, and integrate bibliography mapping before hierarchy normalization as specified by the team contract.
+Tests do not call APIs, compile LaTeX, crawl, or process real corpora. Integration orchestration now handles publications and all their versions together; see INTEGRATION.md for the CLI and the remaining real-data validation gates.

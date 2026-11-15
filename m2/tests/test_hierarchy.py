@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.parsing.contracts import GatheredDocument, ParsedNode
-from src.parsing.hierarchy import parse_hierarchy
+from m2.src.parsing.contracts import GatheredDocument, ParsedNode
+from m2.src.parsing.hierarchy import parse_hierarchy
 
 
 def gathered(latex: str, status: str = "ok") -> GatheredDocument:

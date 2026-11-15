@@ -16,8 +16,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 import tv4_builders as fx  # noqa: E402
 
-from src.parsing import benchmark  # noqa: E402
-from src.parsing.deduplication import deduplicate_elements  # noqa: E402
+from m2.src.parsing import benchmark  # noqa: E402
+from m2.src.parsing.deduplication import deduplicate_elements  # noqa: E402
 
 IDS = ["2310.12345", "2310.12346", "2401.00001"]
 
@@ -129,7 +129,9 @@ def test_without_psutil_the_lifetime_high_water_mark_is_used(monkeypatch):
         with bench.stage("work"):
             time.sleep(0.02)
     report = bench.stage_report()["work"]
-    assert report["peak_rss_source"] == "getrusage_process_lifetime"
+    assert report["peak_rss_source"] == (
+        "windows_peak_working_set" if sys.platform == "win32"
+        else "getrusage_process_lifetime")
     assert report["peak_rss_bytes"] > 0 and bench.peak_rss_bytes > 0
 
 

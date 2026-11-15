@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.parsing.contracts import SourceVersion, GatheredDocument, ParsedDocument, ParsedNode, BibEntry, BibliographyResult
+from m2.src.parsing.contracts import SourceVersion, GatheredDocument, ParsedDocument, ParsedNode, BibEntry, BibliographyResult
 
 
 @pytest.mark.parametrize('model,names', [

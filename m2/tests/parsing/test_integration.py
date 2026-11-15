@@ -1,5 +1,5 @@
-from src.parsing.m1_adapter import load_versions
-from src.parsing.gathering import gather_source
+from m2.src.parsing.m1_adapter import load_versions
+from m2.src.parsing.gathering import gather_source
 
 
 def test_adapter_to_gathering_all_versions_and_no_tex(corpus):

@@ -3,9 +3,9 @@ import logging
 import re
 from pathlib import Path
 
-from ..schema import no_symlinks, paper_directory, require_arxiv_id, safe_path
-from ..stages.storage import load_metadata, load_manifest
-from ..stages.validation import validate_manifest
+from m1.src.schema import no_symlinks, paper_directory, require_arxiv_id, safe_path
+from m1.src.stages.storage import load_metadata, load_manifest
+from m1.src.stages.validation import validate_manifest
 from .contracts import SourceVersion
 
 LOGGER = logging.getLogger(__name__)

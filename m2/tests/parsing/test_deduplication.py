@@ -14,9 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 import tv4_builders as fx  # noqa: E402
 
-from src.parsing.deduplication import (  # noqa: E402
+from m2.src.parsing.deduplication import (  # noqa: E402
     deduplicate_elements, deduplicate_with_stats)
-from src.utils.common import paper_key  # noqa: E402
+from m1.src.utils.common import paper_key  # noqa: E402
 
 SINGLE = sorted(fx.SINGLE_PUBLICATION_FIXTURES)
 
@@ -273,12 +273,14 @@ def test_documents_of_different_publications_are_rejected():
         run(mixed)
 
 
-def test_versions_without_tex_are_recorded_as_empty_root_only():
+def test_versions_without_tex_are_recorded_in_status_without_parsed_elements():
     """Example (e)."""
     name = "tv4_no_tex_middle_version"
     elements, hierarchy = run(build(name))
     root2 = full(name, "root2")
-    assert [e for e in elements if e["element_id"] == root2][0]["content"] == "Version 2 root"
+    assert not [e for e in elements if e["element_id"] == root2]
+    _, _, stats = deduplicate_with_stats(build(name))
+    assert stats['version_status'][2] == 'no_tex'
     assert not [r for r in hierarchy if r["version"] == 2]
     assert not [r for r in hierarchy if r["parent_id"] == root2]
 
@@ -401,7 +403,7 @@ def test_stats_count_elements_with_several_parents():
 
 # --------------------------------- robustness added in Phase 3 (D2, D8) -----
 
-from src.parsing import deduplication as dedup  # noqa: E402
+from m2.src.parsing import deduplication as dedup  # noqa: E402
 
 
 def test_match_is_exact_never_fuzzy():

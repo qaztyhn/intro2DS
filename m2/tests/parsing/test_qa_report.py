@@ -12,8 +12,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 import tv4_builders as fx  # noqa: E402
 
-from src.parsing import benchmark, export, qa_report  # noqa: E402
-from src.parsing.deduplication import deduplicate_elements  # noqa: E402
+from m2.src.parsing import benchmark, export, qa_report  # noqa: E402
+from m2.src.parsing.deduplication import deduplicate_elements  # noqa: E402
 
 RATE_KEYS = {"numerator", "denominator", "denominator_definition", "value"}
 
@@ -52,7 +52,7 @@ def walk_rates(node, path=""):
 
 @pytest.fixture
 def no_tex_report(tmp_path):
-    """Example (e): v1 ok, v2 no_tex, v3 ok; 6 elements, 6 hierarchy rows."""
+    """Example (e): v1 ok, v2 no_tex, v3 ok; 5 elements, 6 hierarchy rows."""
     directory = export_fixture(tmp_path / "e", "tv4_no_tex_middle_version")
     rows = [row(1, "ok"), row(2, "no_tex", has_tex=False, reason="NO_TEX_SOURCE"), row(3, "ok")]
     return qa_report.build_qa_report(directory, rows, scope="unit test"), directory, rows

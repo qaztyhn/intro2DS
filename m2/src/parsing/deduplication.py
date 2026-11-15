@@ -1,6 +1,6 @@
 """TV4 — element deduplication across the versions of one publication.
 
-Behaviour is specified by ``docs/m2/tv4_decisions.md`` (D1-D10) and locked by
+Behaviour is specified by ``m2/docs/decisions/dedup_export.md`` (D1-D10) and locked by
 ``tests/parsing/test_deduplication.py``. Nothing here normalizes text: ``content``
 is compared exactly as TV2 produced it, never fuzzily, and never across
 publications.
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterable
 
-from ..utils.common import paper_key
+from m1.src.utils.common import paper_key
 
 if TYPE_CHECKING:  # contracts.py belongs to the team and may not be merged yet
     from .contracts import ParsedDocument, ParsedNode
@@ -178,7 +178,8 @@ class _Publication:
                                  f"treated as failed")
         self.version_status[version] = recorded
         if recorded == "no_tex":
-            self._root(version, f"Version {version} root")  # empty record, no hierarchy
+            # Official M2: an empty/no-TeX version yields no parsed elements.
+            # Keep coverage in version_status, not an invented document root.
             return
         if recorded not in EXPORTED_STATUSES:
             return
