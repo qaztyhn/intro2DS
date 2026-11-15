@@ -3,8 +3,8 @@ import shutil
 
 import pytest
 
-from src.parsing.contracts import SourceVersion
-from src.parsing import gathering as module
+from m2.src.parsing.contracts import SourceVersion
+from m2.src.parsing import gathering as module
 
 
 def source(tmp_path, files):

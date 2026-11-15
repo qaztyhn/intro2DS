@@ -1,3 +1,5 @@
+> Historical component handoff. See [integration decisions](../INTEGRATION.md) for current behavior, especially no-TeX versions (QA only, no synthetic root). Structural dedup policy remains subject to group review.
+
 # TV4 — Tài liệu quyết định kỹ thuật (Dedup, Export, QA)
 
 Trạng thái chung: **Đề xuất — chờ nhóm xác nhận**. Chưa có dòng code nào của TV4 dựa trên tài liệu này.
@@ -484,7 +486,7 @@ Trạng thái: **Đề xuất — chờ nhóm xác nhận.**
 ### Cả nhóm
 
 1. Đồng ý thêm `hierarchy_internal.parquet` có cột `position` (D6).
-2. Layout thư mục: branch TV1 dùng `src/parsing/` và `tests/parsing/`, branch TV2 và TV3 dùng `m2/src/parsing/` và `m2/tests/parsing/`, còn `origin/main` đã tái cấu trúc thành `m1/` và chưa có `m2/`. Cần chốt một layout; TV4 sẽ đặt file theo layout đó.
+2. Layout thư mục: branch TV1 dùng `m2/src/parsing/` và `m2/tests/parsing/`, branch TV2 và TV3 dùng `m2/src/parsing/` và `m2/tests/parsing/`, còn `origin/main` đã tái cấu trúc thành `m1/` và chưa có `m2/`. Cần chốt một layout; TV4 sẽ đặt file theo layout đó.
 3. Đồng ý khóa dedup hai nhóm ở D2 thay cho `(kind, content)` thuần.
 4. Đồng ý ghi nhận version `no_tex` bằng một element root rỗng (D8).
 5. `src/requirements.txt` (đặc tả yêu cầu) cần thêm `pyarrow`, `pandas`, `psutil`.

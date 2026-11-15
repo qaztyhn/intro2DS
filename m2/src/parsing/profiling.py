@@ -5,7 +5,7 @@ versions, source files, includes, root candidates and bibliography formats.
 These regex-based counts are profiling only, not parser results.
 
 Usage (from m2/):
-    python -m src.parsing.profiling scan --run-dir <run_dir> \
+    python -m m2.src.parsing.profiling scan --run-dir <run_dir> \
         --ids-file <ids.txt> --label range1 --out profiling_range1.json
 """
 from __future__ import annotations

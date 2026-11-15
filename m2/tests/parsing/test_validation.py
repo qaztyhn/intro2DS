@@ -15,9 +15,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 import tv4_builders as fx  # noqa: E402
 
-from src.parsing import export, validation  # noqa: E402
-from src.parsing.deduplication import deduplicate_elements  # noqa: E402
-from src.utils.common import paper_key  # noqa: E402
+from m2.src.parsing import export, validation  # noqa: E402
+from m2.src.parsing.deduplication import deduplicate_elements  # noqa: E402
+from m1.src.utils.common import paper_key  # noqa: E402
 
 KEY = paper_key(fx.ID)
 TABLES = ["elements", "hierarchy", "hierarchy_internal", "bibtex"]
@@ -113,7 +113,7 @@ def test_version_without_tex_is_valid_and_counted(tmp_path):
     result = validation.validate_tables(
         write_export(tmp_path / "e", fx.tv4_no_tex_middle_version()))
     assert result["passed"]
-    assert result["counts"]["roots_without_children"] == 1
+    assert result["counts"]["roots_without_children"] == 0
     assert result["counts"]["versions_with_hierarchy"] == 2
 
 

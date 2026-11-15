@@ -13,9 +13,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 import tv4_builders as fx  # noqa: E402
 
-from src.parsing import export  # noqa: E402
-from src.parsing.deduplication import deduplicate_elements  # noqa: E402
-from src.utils.common import paper_key  # noqa: E402
+from m2.src.parsing import export  # noqa: E402
+from m2.src.parsing.deduplication import deduplicate_elements  # noqa: E402
+from m1.src.utils.common import paper_key  # noqa: E402
 
 ALL_FILES = ["elements.parquet", "hierarchy.parquet", "hierarchy_internal.parquet",
              "bibtex.parquet"]
@@ -382,7 +382,7 @@ def test_bibtex_rows_export_cleanly(tmp_path):
 
 def test_dedup_output_exports_with_the_hand_computed_sizes(tmp_path):
     expected = {"tv4_two_versions_one_sentence_changed": (8, 8),
-                "tv4_three_versions_reordered": (10, 15), "tv4_no_tex_middle_version": (6, 6)}
+                "tv4_three_versions_reordered": (10, 15), "tv4_no_tex_middle_version": (5, 6)}
     for name, (n_elements, n_rows) in expected.items():
         elements, hierarchy = deduplicate_elements(fx.SINGLE_PUBLICATION_FIXTURES[name]())
         out = tmp_path / name

@@ -1,7 +1,7 @@
-from src.parsing.bibliography import (
+from m2.src.parsing.bibliography import (
     clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography,
 )
-from src.parsing.contracts import BibEntry, GatheredDocument
+from m2.src.parsing.contracts import BibEntry, GatheredDocument
 from pathlib import Path
 
 

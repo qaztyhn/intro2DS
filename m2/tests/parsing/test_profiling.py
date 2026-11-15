@@ -2,7 +2,7 @@ import json
 import pytest
 from pathlib import Path
 
-from src.parsing import profiling as P
+from m2.src.parsing import profiling as P
 
 
 def make_paper(run: Path, arxiv_id, versions, metadata_versions=None):
@@ -215,7 +215,7 @@ def test_cli_merge_writes_files_and_is_deterministic(tmp_path):
         out_json, out_md = tmp_path / f"{tag}.json", tmp_path / f"{tag}.md"
         assert P.main(["merge", "--inputs", *paths, "--out-json", str(out_json),
                        "--out-md", str(out_md)]) == 0
-        outputs.append((out_json.read_text(), out_md.read_text()))
+        outputs.append((out_json.read_text(encoding='utf-8'), out_md.read_text(encoding='utf-8')))
     assert outputs[0] == outputs[1]
 
 

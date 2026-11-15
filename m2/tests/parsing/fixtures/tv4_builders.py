@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 
 try:  # prefer the team contract once it is merged
-    from src.parsing.contracts import ParsedDocument, ParsedNode
+    from m2.src.parsing.contracts import ParsedDocument, ParsedNode
 except ImportError:  # TEMPORARY copy of Contract §2.3-C, remove when contracts.py lands
     from dataclasses import dataclass, field
 
@@ -287,7 +287,6 @@ EXPECTED: dict[str, dict] = {
     "tv4_no_tex_middle_version": {
         "elements": {
             "root1": ("document", TITLE),
-            "root2": ("document", "Version 2 root"),
             "root3": ("document", TITLE),
             "h1": ("section", "Intro"),
             "p1": ("paragraph", "Hello."),

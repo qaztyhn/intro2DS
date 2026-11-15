@@ -25,7 +25,10 @@ import json
 import os
 import platform
 import re
-import resource
+try:
+    import resource
+except ImportError:  # Windows has no POSIX resource module.
+    resource = None
 import shutil
 import subprocess
 import sys
@@ -37,7 +40,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from ..utils.common import load_ids
+from m1.src.utils.common import load_ids
 from . import export, validation
 from .deduplication import deduplicate_elements
 
@@ -47,7 +50,7 @@ _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 MODES = ("pipeline", "tv4_only")
 
 try:  # same RSS definition as the M1 benchmark: process plus current descendants
-    from ..metrics import process_tree_rss_bytes as _tree_rss
+    from m1.src.metrics import process_tree_rss_bytes as _tree_rss
 except ImportError:  # psutil (or M1 metrics) unavailable
     _tree_rss = None
 
@@ -66,6 +69,9 @@ def _rss_now() -> int | None:
 
 def lifetime_peak_rss_bytes() -> int:
     """High-water RSS of this process since it started (``ru_maxrss``; KiB on Linux)."""
+    if resource is None:
+        import psutil
+        return int(psutil.Process().memory_info().peak_wset)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak if sys.platform == "darwin" else peak * 1024)
 
@@ -181,7 +187,8 @@ class Benchmark:
         for name, entry in self._stages.items():
             row = dict(entry)
             row["peak_rss_source"] = "psutil_sampling" if fallback is None \
-                else "getrusage_process_lifetime"
+                else ("windows_peak_working_set" if resource is None
+                      else "getrusage_process_lifetime")
             if fallback is not None:
                 row["peak_rss_bytes"] = fallback
             out[name] = row

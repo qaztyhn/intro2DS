@@ -9,7 +9,7 @@ import posixpath
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from ..schema import no_symlinks, relative_path, require_arxiv_id, require_version
+from m1.src.schema import no_symlinks, relative_path, require_arxiv_id, require_version
 from .contracts import GatheredDocument, SourceVersion
 
 MAX_FILE_BYTES = 64 * 2**20
