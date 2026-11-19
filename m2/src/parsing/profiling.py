@@ -35,7 +35,13 @@ _ADDBIB = re.compile(r"\\addbibresource(?:\[[^\]]*\])?\s*\{([^{}]*)\}")
 _THEBIB = re.compile(r"\\begin\s*\{thebibliography\}")
 _BIBITEM = re.compile(r"\\bibitem\b")
 _BBL_ENTRY = re.compile(r"\\entry\s*\{")  # biblatex/biber .bbl style
-
+_HARVARD = re.compile(r"\\harvarditem\b")
+_REFERENCE_CMD = re.compile(r"\\reference\b")
+_REF_HEADING = re.compile(
+    r"\\(?:chapter|section|subsection)\*?\s*\{\s*(?:references?|bibliography|"
+    r"literature\s+cited|works\s+cited)\s*\}", re.I)
+_LIST_ENV = re.compile(r"\\begin\s*\{(enumerate|itemize|list|description)\}")
+_ITEM = re.compile(r"\\item\b")
 
 def paper_key(arxiv_id: str) -> str:
     return arxiv_id.replace(".", "-").replace("/", "__")
@@ -125,6 +131,7 @@ def _blank_record(arxiv_id: str, version: int) -> dict:
         "bbl_bytes": 0, "multi_file": False, "n_root_candidates": 0,
         "n_include_cmds": 0, "missing_includes": [], "max_include_depth": 0,
         "include_cycle": False, "n_bibitem": 0, "n_thebibliography": 0,
+        "n_item_bibliography": 0, "n_harvarditem": 0, "n_reference_cmd": 0,
         "bibliography_cmd": False, "missing_bib_files": [],
         "bib_format": "none", "notes": [],
     }
@@ -139,6 +146,20 @@ def _category(manifest: dict) -> str:
     if status == "empty" and manifest.get("error_code") == NO_TEX_SOURCE:
         return "no_tex"
     return "extract_failed"
+
+
+def _count_item_bibliography(text: str) -> int:
+    """\\item entries of a list that starts right after a References heading."""
+    h = _REF_HEADING.search(text)
+    if not h:
+        return 0
+    tail = text[h.end():]
+    env = _LIST_ENV.search(tail[:300])
+    if not env:
+        return 0
+    body = tail[env.end():]
+    end = re.search(r"\\end\s*\{" + env.group(1) + r"\}", body)
+    return len(_ITEM.findall(body[:end.start()] if end else body))
 
 
 def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
@@ -227,6 +248,9 @@ def profile_version_data(arxiv_id: str, version: int, manifest: dict | None,
                 edges.setdefault(path, []).append(resolved)
         rec["n_bibitem"] += len(_BIBITEM.findall(text))
         rec["n_thebibliography"] += len(_THEBIB.findall(text))
+        rec["n_harvarditem"] += len(_HARVARD.findall(text))
+        rec["n_reference_cmd"] += len(_REFERENCE_CMD.findall(text))
+        rec["n_item_bibliography"] += _count_item_bibliography(text)
         for group in _BIBLIOGRAPHY.findall(text) + _ADDBIB.findall(text):
             bib_names.extend(n.strip() for n in group.split(",") if n.strip())
 
@@ -342,6 +366,12 @@ def summarize(papers: list[dict], versions: list[dict]) -> dict:
             cnt(tex, lambda v: v["bibliography_cmd"] and v["bib_format"] == "none"), nt, TEX),
         "bib_cmd_without_bib_file": _rate(cnt(tex, lambda v: bool(v["missing_bib_files"])), nt, TEX),
         "no_bibliography_detected": _rate(cnt(tex, lambda v: v["bib_format"] == "none"), nt, TEX),
+        "item_list_bibliography": _rate(cnt(tex, lambda v: v["n_item_bibliography"] >= 3), nt, TEX),
+        "harvarditem_present": _rate(cnt(tex, lambda v: v["n_harvarditem"] > 0), nt, TEX),
+        "reference_cmd_present": _rate(cnt(tex, lambda v: v["n_reference_cmd"] > 0), nt, TEX),
+        "unparsed_format_candidate": _rate(cnt(tex, lambda v: v["bib_format"] == "none" and (
+            v["n_item_bibliography"] >= 3 or v["n_harvarditem"] > 0
+            or v["n_reference_cmd"] > 0)), nt, TEX),
         "multi_version": _rate(cnt(ok_papers, lambda p: p["n_versions"] >= 2), npub, PUB),
         "version_mismatch": _rate(cnt(ok_papers, lambda p: p["version_mismatch"]), npub, PUB),
     }
@@ -379,6 +409,7 @@ _SAMPLE_RULES = [
     ("bib_file", lambda r, p: r["n_bib"] > 0),
     ("bibitem", lambda r, p: r["n_bibitem"] > 0),
     ("bbl", lambda r, p: r["n_bbl"] > 0),
+    ("item_bibliography", lambda r, p: r["n_item_bibliography"] >= 3),
     ("root_ambiguity", lambda r, p: r["has_tex"] and r["n_root_candidates"] != 1),
     ("missing_include", lambda r, p: bool(r["missing_includes"])),
 ]
@@ -537,6 +568,11 @@ RATE_LABELS = {
     "no_bibliography_detected": "Không phát hiện bibliography nào",
     "multi_version": "Publication có >= 2 version",
     "version_mismatch": "Publication lệch version giữa metadata và thư mục",
+    "item_list_bibliography": "Bibliography viết bằng `\\item` (>= 3 mục sau tiêu đề References)",
+    "harvarditem_present": "Có `\\harvarditem`",
+    "reference_cmd_present": "Có `\\reference`",
+    "unparsed_format_candidate":
+        "Không có nguồn parse được nhưng có `\\item`/`\\harvarditem`/`\\reference`",
 }
 _DIST_TITLES = {
     "versions_per_paper": "Số version mỗi publication",
