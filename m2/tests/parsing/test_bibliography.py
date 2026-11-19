@@ -1,5 +1,5 @@
 from src.parsing.bibliography import (
-    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography,
+    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography, build_key_resolver,
 )
 from src.parsing.contracts import BibEntry, GatheredDocument
 from pathlib import Path
@@ -431,3 +431,54 @@ def test_normalize_weird_values_never_raises():
     f = normalize_entry(e).fields
     assert f["title"] is None and f["authors"] == []
     assert f["year"] is None and f["doi"] is None and f["url"] is None
+
+
+def _doc_bib(text):
+    return GatheredDocument("x", 1, "main.tex", "", ["main.tex"], {"r.bib": text}, "ok")
+
+
+def test_string_defined_after_use():
+    entries, warns = parse_bib('@article{a, journal = jrn, title = {T}}\n@string{jrn = "Nature"}')
+    assert entries[0].fields["journal"] == "Nature" and warns == []
+
+
+def test_commented_entry_skipped_but_percent_in_value_kept():
+    entries, _ = parse_bib("% @article{old, title={Old}}\n@misc{u, url = {http://a/b%20c}}\n")
+    assert [e.original_key for e in entries] == ["u"]
+    assert entries[0].fields["url"] == "http://a/b%20c"
+
+
+CROSS = """
+@proceedings{proc, title = {Proc. of X}, year = 2019, publisher = {ACM}}
+@inproceedings{paper1, author = {Lee, Kim}, title = {Own Title}, crossref = {PROC}}
+@inproceedings{orphan, title = {Orphan}, crossref = {nope}}
+@misc{c1, title = {C1}, crossref = {c2}}
+@misc{c2, title = {C2}, crossref = {c1}}
+"""
+
+
+def test_crossref_inheritance_missing_parent_and_cycle():
+    entries = {e.original_key: e for e in extract_bibliography(_doc_bib(CROSS))}
+    p = entries["paper1"].fields
+    assert p["title"] == "Own Title"            # child's own title is kept
+    assert p["booktitle"] == "Proc. of X"       # parent's title -> booktitle
+    assert p["year"] == 2019 and p["publisher"] == "ACM"
+    assert "booktitle" not in entries["orphan"].fields
+    assert entries["c1"].fields["title"] == "C1"  # cycle: terminates, own title kept
+
+
+def test_extract_case_insensitive_duplicates_and_keyless_entries():
+    doc = _doc_bib("@misc{Smith2020, title={A}}\n@misc{smith2020, title={B}}\n"
+                   "@misc{, title={K1}}\n@misc{, title={K2}}")
+    entries = extract_bibliography(doc)
+    assert [e.original_key for e in entries] == ["Smith2020", "", ""]
+    assert entries[0].fields["title"] == "A"
+
+
+def test_build_key_resolver():
+    resolve = build_key_resolver({"smith2020": "canon", "A": "ca", "a": "cb"})
+    assert resolve("smith2020") == "canon"
+    assert resolve(" Smith2020 ") == "canon"
+    assert resolve("A") == "ca" and resolve("a") == "cb"   # exact match wins
+    assert resolve("unknown") is None
+    assert build_key_resolver({"Ab": "x", "aB": "y"})("AB") is None  # ambiguous

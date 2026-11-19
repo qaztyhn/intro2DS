@@ -10,6 +10,7 @@ import re
 import unicodedata
 
 from typing import NamedTuple
+from collections.abc import Callable
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
 
 log = logging.getLogger(__name__)
@@ -123,11 +124,8 @@ def _read_fields(
             fields[name] = value.strip()
 
 
-def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
-    """Parse BibTeX text into raw entries. Returns (entries, warnings)."""
+def _scan(text: str, strings: dict[str, str], warnings: list[str]) -> list[BibEntry]:
     entries: list[BibEntry] = []
-    warnings: list[str] = []
-    strings = dict(_MONTHS)
     pos = 0
     while True:
         m = _ENTRY_START.search(text, pos)
@@ -138,6 +136,9 @@ def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
         close_ch = "}" if open_ch == "{" else ")"
         i = m.end()
         pos = i  # on error, resume scanning right after this '@type{'
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        if "%" in text[line_start:m.start()]:
+            continue  # '@' on a %-commented line: ignored (biber semantics)
         key = ""
         try:
             if kind in _SKIP_TYPES:
@@ -158,8 +159,67 @@ def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
             entries.append(BibEntry(original_key=key, entry_type=kind, fields=fields))
         except ValueError as exc:
             warnings.append(f"malformed @{kind} entry '{key}': {exc}")
+    return entries
+
+
+def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
+    """Parse BibTeX text into raw entries. Returns (entries, warnings).
+
+    Two passes: the first collects every @string (so a macro may be defined
+    after its use), the second parses entries and reports warnings.
+    """
+    table = dict(_MONTHS)
+    _scan(text, table, [])  # pass 1: collect @string definitions, discard the rest
+    warnings: list[str] = []
+    entries = _scan(text, dict(table), warnings)
     return entries, warnings
 
+
+_BOOKTITLE_TYPES = {"inproceedings", "incollection", "inbook", "conference"}
+
+
+def resolve_crossrefs(entries: list[BibEntry]) -> tuple[list[BibEntry], list[str]]:
+    """Fill missing fields from the entry named by `crossref` (case-insensitive).
+
+    The parent's `title` is never copied into the child's `title`; for
+    proceedings-like children it becomes `booktitle` when that is missing.
+    """
+    warnings: list[str] = []
+    by_key: dict[str, BibEntry] = {}
+    for e in entries:
+        if e.original_key:
+            by_key.setdefault(e.original_key.casefold(), e)
+
+    resolved: list[BibEntry] = []
+    for e in entries:
+        fields = dict(e.fields)
+        seen = {e.original_key.casefold()}
+        cur = e
+        for level in range(3):
+            ref = str(cur.fields.get("crossref", "")).strip().casefold()
+            if not ref:
+                break
+            parent = by_key.get(ref)
+            if parent is None:
+                warnings.append(f"{e.original_key}: crossref '{ref}' not found")
+                break
+            if ref in seen:
+                warnings.append(f"{e.original_key}: crossref cycle at '{ref}'")
+                break
+            seen.add(ref)
+            for name, value in parent.fields.items():
+                if name == "crossref":
+                    continue
+                if name == "title":
+                    if (level == 0 and e.entry_type in _BOOKTITLE_TYPES
+                            and not fields.get("booktitle")):
+                        fields["booktitle"] = value
+                    continue
+                if not fields.get(name):
+                    fields[name] = value
+            cur = parent
+        resolved.append(BibEntry(e.original_key, e.entry_type, fields))
+    return resolved, warnings
 
 # --------------------------------------------------------------------------
 # \bibitem / thebibliography / .bbl
@@ -254,13 +314,40 @@ def extract_bibliography(document: GatheredDocument) -> list[BibEntry]:
         for w in warns:
             log.warning("%s stage=bib_parse file=%s: %s", tag, path, w)
         for e in parsed:
-            if e.original_key in seen:
+            fold = e.original_key.casefold()  # BibTeX keys are case-insensitive
+            if fold and fold in seen:
                 log.warning("%s stage=bib_parse file=%s: duplicate key '%s' "
                             "skipped (first kept)", tag, path, e.original_key)
                 continue
-            seen.add(e.original_key)
+            if fold:
+                seen.add(fold)
             entries.append(e)
+
+    entries, cross_warns = resolve_crossrefs(entries)
+    for w in cross_warns:
+        log.warning("%s stage=bib_crossref: %s", tag, w)
     return [normalize_entry(e) for e in entries]
+
+
+def build_key_resolver(mapping: dict[str, str]) -> Callable[[str], str | None]:
+    """Return a lookup for \\cite keys against a version's key_mapping.
+
+    Exact match first, then case-insensitive (BibTeX semantics). Returns None
+    when the key is unknown or the case-insensitive match is ambiguous.
+    """
+    folded: dict[str, set[str]] = {}
+    for old, canon in mapping.items():
+        folded.setdefault(old.casefold(), set()).add(canon)
+
+    def resolve(key: str) -> str | None:
+        key = key.strip()
+        if key in mapping:
+            return mapping[key]
+        hits = folded.get(key.casefold(), set())
+        return next(iter(hits)) if len(hits) == 1 else None
+
+    return resolve
+
 
 # --------------------------------------------------------------------------
 # Field normalization
