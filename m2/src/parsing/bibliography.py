@@ -269,6 +269,31 @@ def _venue_text(block: str) -> str:
     return re.sub(r"^\s*in\b\s*:?\s*", "", text, flags=re.I).strip()
 
 
+_QUOTED_TITLE = re.compile(
+    r"(?:``|\u201c|(?<!\\)\")(.+?)(?:''|\u201d|(?<!\\)\")", re.S)
+
+
+def _quoted_title_fields(body: str) -> dict[str, str] | None:
+    """High-precision split for 'Authors, ``Title,'' \\emph{Venue}, year' styles."""
+    m = _QUOTED_TITLE.search(body)
+    if not m:
+        return None
+    title = _collapse(m.group(1)).strip(" ,.;")
+    author = _collapse(body[:m.start()]).strip(" ,;:")
+    if len(title) < 5 or len(title) > 300 or len(author) < 2:
+        return None
+    out = {"title": title, "author": author}
+    after = body[m.end():]
+    em = _EMPH.search(after)
+    if em:
+        venue = _collapse(em.group(1))
+        if re.search(r"\bin\s*:?\s*$", after[:em.start()], re.I) or _VENUE_HINT.search(venue):
+            out["booktitle"] = _venue_text(venue)
+        else:
+            out["journal"] = venue
+    return out
+
+
 def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
     fields: dict[str, str] = {"raw": _collapse(body)}
     if label is not None:
@@ -294,6 +319,7 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
     blocks = [_collapse(b) for b in _NEWBLOCK.split(body)]
     blocks = [b for b in blocks if b]
     if len(blocks) >= 2:
+        fields["parse_mode"] = "newblock"
         fields["author"] = blocks[0]
         fields["title"] = blocks[1]
         if len(blocks) >= 3:
@@ -301,6 +327,13 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
                 fields["booktitle"] = _venue_text(blocks[2])
             else:
                 fields["journal"] = blocks[2]
+    else:
+        quoted = _quoted_title_fields(body)
+        if quoted:
+            fields.update(quoted)
+            fields["parse_mode"] = "quoted"
+        else:
+            fields["parse_mode"] = "raw_only"
     return fields
 
 

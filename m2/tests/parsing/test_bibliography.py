@@ -641,3 +641,43 @@ def test_journal_macro_recorded_and_plain_abbreviation_untouched():
     assert norm("ApJ")["journal"] == "ApJ" and "journal_macro" not in norm("ApJ")
     assert norm(r"\apjlett")["journal"] == "The Astrophysical Journal Letters"
     assert norm(r"\psj")["journal"] == "The Planetary Science Journal"
+
+
+def test_bibitem_quoted_title_ieee_journal_and_conference():
+    entries, _ = parse_bibitems(
+        "\\bibitem{j} J. Smith and A. Doe, ``Deep learning for graphs,'' "
+        "\\emph{Nature}, vol. 5, no. 2, pp. 1--10, 2020.\n"
+        "\\bibitem{c} K. Lee, ``Attention revisited,'' in \\emph{Proc. ICML}, 2019.")
+    j = normalize_entry(entries[0]).fields
+    assert j["parse_mode"] == "quoted"
+    assert j["title"] == "Deep learning for graphs"
+    assert j["authors"] == ["J. Smith", "A. Doe"]
+    assert j["journal"] == "Nature" and j["year"] == 2020
+    c = normalize_entry(entries[1]).fields
+    assert c["title"] == "Attention revisited"
+    assert c["booktitle"] == "Proc. ICML" and c["journal"] is None
+    assert c["year"] == 2019
+
+
+def test_bibitem_straight_quotes_ignore_latex_accent_quote():
+    entries, _ = parse_bibitems(
+        '\\bibitem{s} M{\\"u}ller, A. "A study of X," Journal of Y, 2018.')
+    f = normalize_entry(entries[0]).fields
+    assert f["parse_mode"] == "quoted"
+    assert f["title"] == "A study of X"
+    assert f["authors"] == ["A. Müller"]
+    assert f["year"] == 2018 and f["journal"] is None
+
+
+def test_bibitem_without_quotes_stays_raw_only():
+    for body in ("Foo Bar, A manual entry, 2021.",
+                 "Hinton's book, 2020.",
+                 "``Only a title,'' 2020."):          # nothing before the quote
+        e = parse_bibitems("\\bibitem{n} " + body)[0][0]
+        assert e.fields["parse_mode"] == "raw_only"
+        assert "title" not in e.fields
+
+
+def test_bibitem_parse_mode_newblock():
+    e = parse_bibitems("\\bibitem{a} A. B.\n\\newblock A Title Here.\n\\newblock Journal, 2020.")[0][0]
+    assert e.fields["parse_mode"] == "newblock"
