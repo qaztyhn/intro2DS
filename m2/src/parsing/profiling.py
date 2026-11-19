@@ -5,7 +5,7 @@ versions, source files, includes, root candidates and bibliography formats.
 These regex-based counts are profiling only, not parser results.
 
 Usage (from m2/):
-    python -m src.parsing.profiling scan --run-dir <run_dir> \
+    python -m m2.src.parsing.profiling scan --run-dir <run_dir> \
         --ids-file <ids.txt> --label range1 --out profiling_range1.json
 """
 from __future__ import annotations
@@ -163,9 +163,20 @@ def _count_item_bibliography(text: str) -> int:
 
 
 def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
-    rec = _blank_record(arxiv_id, version)
     vdir = paper_dir / "versions" / f"v{version}"
     manifest = _read_json(vdir / "manifest.json")
+    return profile_version_data(arxiv_id, version, manifest,
+                                lambda rel: _safe_read(vdir / 'source', rel))
+
+
+def profile_version_data(arxiv_id: str, version: int, manifest: dict | None,
+                         read_source) -> dict:
+    """The same preliminary profiler with a bounded, read-only source reader.
+
+    Archive intake supplies this reader without extracting a whole corpus.
+    A reader returns (decoded prefix, full byte size), or None for unsafe/missing.
+    """
+    rec = _blank_record(arxiv_id, version)
     if manifest is None:
         rec["notes"].append("manifest.json missing or unreadable")
         return rec
@@ -180,7 +191,6 @@ def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
         rec["notes"].append("source_files is not a list")
     rec["n_source_files"] = len(listed)
 
-    source_dir = vdir / "source"
     tex: dict[str, str] = {}
     bib: dict[str, str] = {}
     bbl: dict[str, str] = {}
@@ -192,7 +202,7 @@ def profile_version(paper_dir: Path, arxiv_id: str, version: int) -> dict:
             else:
                 rec["listed_files_missing"] += 1
             continue
-        got = _safe_read(source_dir, rel)
+        got = read_source(rel)
         if got is None:
             rec["listed_files_missing"] += 1
             continue

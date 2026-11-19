@@ -1,7 +1,7 @@
-from src.parsing.bibliography import (
-    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography, build_key_resolver,
+from m2.src.parsing.bibliography import (
+    clean_text, extract_bibliography, normalize_entry, parse_bib, parse_bibitems, unify_bibliography,
 )
-from src.parsing.contracts import BibEntry, GatheredDocument
+from m2.src.parsing.contracts import BibEntry, GatheredDocument
 from pathlib import Path
 
 
@@ -119,6 +119,13 @@ def test_bibitem_comment_ignored():
 def test_bibitem_empty_key_warns():
     entries, warns = parse_bibitems("\\bibitem{} nothing")
     assert entries == [] and len(warns) == 1
+
+
+def test_bibitem_empty_url_is_ignored():
+    entries, warns = parse_bibitems(r"\bibitem{x} Author. \url{}")
+    assert len(entries) == 1
+    assert "url" not in entries[0].fields
+    assert warns == []
 
 
 def test_extract_merges_bib_and_bibitem_dedup_by_key():

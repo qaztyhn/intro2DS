@@ -3,7 +3,7 @@
 
 import pytest
 
-from src.parsing.normalization import (
+from m2.src.parsing.normalization import (
     normalize_block_math,
     normalize_citations,
     normalize_content,

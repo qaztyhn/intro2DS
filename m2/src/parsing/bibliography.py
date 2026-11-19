@@ -19,6 +19,8 @@ _ENTRY_START = re.compile(r"@\s*([A-Za-z]+)\s*([{(])")
 _KEY = re.compile(r"[^\s,{}]+")
 _FIELD_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_\-:.]*")
 _TOKEN = re.compile(r"[^\s,{}#\"=()]+")
+_RECOVERY_FIELD = re.compile(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-:.]*)\s*=')
+_RECOVERY_ENTRY = re.compile(r'(?m)^[ \t]*@\s*[A-Za-z]+\s*[{(]')
 _SKIP_TYPES = {"comment", "preamble"}
 _MONTHS = {
     "jan": "January", "feb": "February", "mar": "March", "apr": "April",
@@ -124,7 +126,43 @@ def _read_fields(
             fields[name] = value.strip()
 
 
-def _scan(text: str, strings: dict[str, str], warnings: list[str]) -> list[BibEntry]:
+def _recover_fields(text, start, strings, key, close_ch):
+    """Quarantine malformed fields; keep only independently bounded valid values.
+
+    Recovery requires a title and an author/year/DOI. It never fixes braces or
+    invents field values. Line-anchored assignments are resynchronization points;
+    A recovered value may not consume a later line's field assignment. Ambiguous
+    multi-line values are quarantined rather than swallowing the rest of an entry.
+    """
+    boundary = _RECOVERY_ENTRY.search(text, start)
+    end = boundary.start() if boundary else len(text)
+    fragment = text[start:end]
+    matches = list(_RECOVERY_FIELD.finditer(fragment))
+    fields, warnings = {}, []
+    for i, match in enumerate(matches):
+        name = match[1].lower()
+        next_field = matches[i + 1].start() if i + 1 < len(matches) else len(fragment)
+        field_text = fragment[match.end():next_field]
+        try:
+            value, after = _read_value(field_text, 0, strings)
+            tail = ''.join(field_text[after:].split())
+            allowed = {'' , ','} if next_field < len(fragment) else {'', ',', close_ch, ',' + close_ch}
+            if tail not in allowed:
+                raise ValueError('unparsed tokens after value')
+            if name not in fields:
+                fields[name] = value.strip()
+            else:
+                warnings.append(f'{key}: duplicate field {name!r} ignored during recovery')
+        except ValueError:
+            warnings.append(f'{key}: quarantined malformed field {name!r}')
+    if not fields.get('title') or not any(fields.get(n) for n in ('author', 'year', 'doi')):
+        return None, [], end
+    warnings.append(f'{key}: recovered independently valid fields; entry remains partial')
+    return fields, warnings, end
+
+
+def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
+    """Parse BibTeX text into raw entries. Returns (entries, warnings)."""
     entries: list[BibEntry] = []
     pos = 0
     while True:
@@ -159,19 +197,12 @@ def _scan(text: str, strings: dict[str, str], warnings: list[str]) -> list[BibEn
             entries.append(BibEntry(original_key=key, entry_type=kind, fields=fields))
         except ValueError as exc:
             warnings.append(f"malformed @{kind} entry '{key}': {exc}")
-    return entries
-
-
-def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
-    """Parse BibTeX text into raw entries. Returns (entries, warnings).
-
-    Two passes: the first collects every @string (so a macro may be defined
-    after its use), the second parses entries and reports warnings.
-    """
-    table = dict(_MONTHS)
-    _scan(text, table, [])  # pass 1: collect @string definitions, discard the rest
-    warnings: list[str] = []
-    entries = _scan(text, dict(table), warnings)
+            if key and kind not in _SKIP_TYPES and kind != 'string':
+                recovered, details, resume = _recover_fields(text, km.end(), strings, key, close_ch)
+                if recovered is not None:
+                    entries.append(BibEntry(key, kind, recovered))
+                    warnings.extend(details)
+                    pos = resume
     return entries, warnings
 
 
@@ -304,7 +335,9 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
         fields["doi"] = m.group(0).rstrip(".)")
     m = _URL.search(body)
     if m:
-        fields["url"] = (m.group(1) or m.group(2)).rstrip(".,;)")
+        url = m.group(1) or m.group(2)
+        if url:
+            fields["url"] = url.rstrip(".,;)")
     m = _ARXIV.search(body)
     if m:
         fields["eprint"] = m.group(1)
@@ -404,7 +437,7 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
     return entries, warnings
 
 
-def extract_bibliography(document: GatheredDocument) -> list[BibEntry]:
+def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibEntry], list[str]]:
     """Extract raw entries of one version: .bib, then .bbl, then inline \\bibitem."""
     tag = f"[{document.arxiv_id} v{document.version}]"
     sources: list[tuple[str, list[BibEntry], list[str]]] = []
@@ -416,24 +449,37 @@ def extract_bibliography(document: GatheredDocument) -> list[BibEntry]:
     sources.append(("<latex>", *parse_bibitems(document.latex)))
 
     entries: list[BibEntry] = []
+    diagnostics: list[str] = []
     seen: set[str] = set()
     for path, parsed, warns in sources:
         for w in warns:
             log.warning("%s stage=bib_parse file=%s: %s", tag, path, w)
+            diagnostics.append(f'{tag} stage=bib_parse file={path}: {w}')
         for e in parsed:
             fold = e.original_key.casefold()  # BibTeX keys are case-insensitive
             if fold and fold in seen:
                 log.warning("%s stage=bib_parse file=%s: duplicate key '%s' "
                             "skipped (first kept)", tag, path, e.original_key)
+                diagnostics.append(f'{tag} stage=bib_parse file={path}: duplicate key {e.original_key!r} skipped')
                 continue
             if fold:
                 seen.add(fold)
             entries.append(e)
+    return [normalize_entry(e) for e in entries], diagnostics
 
-    entries, cross_warns = resolve_crossrefs(entries)
-    for w in cross_warns:
-        log.warning("%s stage=bib_crossref: %s", tag, w)
-    return [normalize_entry(e) for e in entries]
+
+def extract_bibliography(document: GatheredDocument) -> list[BibEntry]:
+    """Contract interface; diagnostics are available via the detailed helper."""
+    return extract_bibliography_detailed(document)[0]
+
+
+_CITED = re.compile(r'\\[A-Za-z]*[Cc]ite[A-Za-z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^{}]*)\}')
+
+
+def cited_keys(text: str) -> set[str]:
+    """Citation keys as written; no guessing or DOI/S2 lookup."""
+    return {key.strip() for match in _CITED.finditer(text)
+            for key in match[1].split(',') if key.strip()}
 
 
 def build_key_resolver(mapping: dict[str, str]) -> Callable[[str], str | None]:
@@ -1014,5 +1060,3 @@ def unify_bibliography(
     return BibliographyResult(
         arxiv_id=arxiv_id, entries=entries, key_mapping=mapping, warnings=warnings,
     )
-
-

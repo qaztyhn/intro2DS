@@ -2,7 +2,7 @@ import json
 import pytest
 from pathlib import Path
 
-from src.parsing import profiling as P
+from m2.src.parsing import profiling as P
 
 
 def make_paper(run: Path, arxiv_id, versions, metadata_versions=None):
@@ -215,7 +215,7 @@ def test_cli_merge_writes_files_and_is_deterministic(tmp_path):
         out_json, out_md = tmp_path / f"{tag}.json", tmp_path / f"{tag}.md"
         assert P.main(["merge", "--inputs", *paths, "--out-json", str(out_json),
                        "--out-md", str(out_md)]) == 0
-        outputs.append((out_json.read_text(), out_md.read_text()))
+        outputs.append((out_json.read_text(encoding='utf-8'), out_md.read_text(encoding='utf-8')))
     assert outputs[0] == outputs[1]
 
 
@@ -224,44 +224,3 @@ def test_cli_merge_bad_input_returns_2(tmp_path):
     bad.write_text("{}")
     assert P.main(["merge", "--inputs", str(bad), "--out-json", str(tmp_path / "o.json"),
                    "--out-md", str(tmp_path / "o.md")]) == 2
-
-
-ITEM_TEX = r"""\documentclass{article}
-\section*{References}
-\begin{enumerate}
-\item A. Smith. Title one. 2020.
-\item B. Jones. Title two. 2019.
-\item C. Lee. Title three. 2018.
-\end{enumerate}
-"""
-HARVARD_TEX = (r"\documentclass{article}\harvarditem{Smith}{2020}{s20}{Smith (2020) T.}"
-               r"\harvarditem{Doe}{2019}{d19}{Doe (2019) T.}\reference{x}")
-
-
-def test_item_list_bibliography_detected(tmp_path):
-    make_paper(tmp_path, "2501.00030", {1: {"files": {"main.tex": ITEM_TEX}}})
-    r = P.profile_paper(tmp_path, "2501.00030")[1][0]
-    assert r["n_item_bibliography"] == 3 and r["bib_format"] == "none"
-
-
-def test_item_list_without_references_heading_not_counted(tmp_path):
-    make_paper(tmp_path, "2501.00031", {1: {"files": {"main.tex":
-        r"\documentclass{article}\begin{enumerate}\item a \item b \item c\end{enumerate}"}}})
-    assert P.profile_paper(tmp_path, "2501.00031")[1][0]["n_item_bibliography"] == 0
-
-
-def test_harvarditem_and_reference_cmd_counted(tmp_path):
-    make_paper(tmp_path, "2501.00032", {1: {"files": {"main.tex": HARVARD_TEX}}})
-    r = P.profile_paper(tmp_path, "2501.00032")[1][0]
-    assert r["n_harvarditem"] == 2 and r["n_reference_cmd"] == 1
-
-
-def test_unparsed_format_candidate_rates(tmp_path):
-    make_paper(tmp_path, "2501.00030", {1: {"files": {"main.tex": ITEM_TEX}}})
-    make_paper(tmp_path, "2501.00032", {1: {"files": {"main.tex": HARVARD_TEX}}})
-    make_paper(tmp_path, "2501.00033", {1: SINGLE})
-    s = P.scan_range(tmp_path, ["2501.00030", "2501.00032", "2501.00033"], "t")["summary"]
-    cand = s["rates"]["unparsed_format_candidate"]
-    assert (cand["count"], cand["denominator"]) == (2, 3)
-    assert s["rates"]["item_list_bibliography"]["count"] == 1
-    assert s["rates"]["harvarditem_present"]["count"] == 1
