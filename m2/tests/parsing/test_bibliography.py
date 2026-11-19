@@ -482,3 +482,74 @@ def test_build_key_resolver():
     assert resolve("A") == "ca" and resolve("a") == "cb"   # exact match wins
     assert resolve("unknown") is None
     assert build_key_resolver({"Ab": "x", "aB": "y"})("AB") is None  # ambiguous
+
+
+def test_bibitem_nested_label_braces():
+    entries, warns = parse_bibitems(
+        "\\bibitem[{{\\em Smith} (2020)}]{k1} Smith, A title, 2020.\n"
+        "\\bibitem[{[1]}]{k2} Other, 2019.\n"
+        "\\bibitem{k3} Third, 2018.")
+    assert [e.original_key for e in entries] == ["k1", "k2", "k3"]
+    assert entries[0].fields["label"] == "{{\\em Smith} (2020)}"
+    assert "k2" not in entries[0].fields["raw"]
+    assert warns == []
+
+
+def test_bibitem_percent_in_url_kept_real_comment_removed():
+    entries, _ = parse_bibitems(
+        "\\bibitem{u} See \\url{http://example.com/file%20name}. % real comment\n"
+        "\\bibitem{v} Next, 2020.")
+    f = entries[0].fields
+    assert f["url"] == "http://example.com/file%20name"
+    assert "real comment" not in f["raw"] and "%20" in f["raw"]
+
+
+def test_bibitem_year_ignores_page_ranges():
+    def year(body):
+        return parse_bibitems("\\bibitem{k} " + body)[0][0].fields["year"]
+    assert year("Smith. Title. Journal, 2020, pp. 1980--1990.") == "2020"
+    assert year("Smith. Title. Journal, pages 1980-1990, 2021.") == "2021"
+    assert year("Smith. Title. Journal 5(2):1980--1990, 2022.") == "2022"
+
+
+def test_bibitem_conference_goes_to_booktitle_not_journal():
+    entries, _ = parse_bibitems(
+        "\\bibitem{c} J. Smith.\n\\newblock A Title.\n"
+        "\\newblock In \\emph{Proc. ICML}, 2020.\n"
+        "\\bibitem{p} J. Doe.\n\\newblock Another.\n"
+        "\\newblock \\emph{Proceedings of the National Academy of Sciences}, 5:1--10, 2020.")
+    c = normalize_entry(entries[0]).fields
+    assert c["booktitle"] == "Proc. ICML" and c["journal"] is None
+    p = normalize_entry(entries[1]).fields
+    assert p["journal"] == "Proceedings of the National Academy of Sciences"
+    assert "booktitle" not in p
+
+
+def test_vancouver_authors():
+    def authors(s):
+        e = BibEntry("k", "misc", {"raw": "x", "author": s})
+        return normalize_entry(e).fields["authors"]
+    assert authors("Smith J, Doe AB, Lee K.") == ["J. Smith", "A. B. Doe", "K. Lee"]
+    assert authors("Google AI") == ["Google AI"]
+
+
+def test_et_al_removed_and_flagged():
+    def norm(author, bibitem=False):
+        fields = {"author": author}
+        if bibitem:
+            fields["raw"] = "x"
+        return normalize_entry(BibEntry("k", "misc", fields)).fields
+    f = norm("Smith, J., et al.", bibitem=True)
+    assert f["authors"] == ["J. Smith"] and f["authors_truncated"] is True
+    assert norm("Smith et al.", bibitem=True)["authors"] == ["Smith"]
+    g = norm("Smith, John and others")
+    assert g["authors"] == ["John Smith"] and g["authors_truncated"] is True
+    assert "authors_truncated" not in norm("Smith, John")
+
+
+def test_unify_bibitem_raw_ignores_latex_markup():
+    v1, _ = parse_bibitems("\\bibitem{a} John Smith. Deep Learning, 2020.")
+    v2, _ = parse_bibitems("\\bibitem{b} John Smith.\n\\newblock Deep \\emph{Learning}, 2020.")
+    r = unify_bibliography("x", {1: v1, 2: v2})
+    assert len(r.entries) == 1
+    assert r.key_mapping == {1: {"a": "a"}, 2: {"b": "a"}}
