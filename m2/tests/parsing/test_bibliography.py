@@ -553,3 +553,79 @@ def test_unify_bibitem_raw_ignores_latex_markup():
     r = unify_bibliography("x", {1: v1, 2: v2})
     assert len(r.entries) == 1
     assert r.key_mapping == {1: {"a": "a"}, 2: {"b": "a"}}
+
+
+def test_unify_missing_year_needs_strong_evidence():
+    short = unify_bibliography("x", {1: [_e("a", "Introduction")],
+                                     2: [_e("b", "Introduction", year="")]})
+    assert len(short.entries) == 2          # generic short title: not merged
+    long_ = unify_bibliography("x", {1: [_e("a", "Attention Is All You Need")],
+                                     2: [_e("b", "Attention Is All You Need", year="")]})
+    assert len(long_.entries) == 1          # contract example: year dropped later
+    other = unify_bibliography("x", {
+        1: [_e("a", "Attention Is All You Need")],
+        2: [_e("b", "Attention Is All You Need", author="Jones, Ann", year="")]})
+    assert len(other.entries) == 2
+
+
+def test_possible_duplicates_reported_not_merged():
+    r = unify_bibliography("x", {1: [_e("a", "Deep Learning"),
+                                     _e("b", "Deep Learning A Survey")]})
+    assert len(r.entries) == 2
+    assert any("possible duplicate" in w and "'a'" in w and "'b'" in w
+               for w in r.warnings)
+    r2 = unify_bibliography("x", {1: [_e("a", "Deep Learning"),
+                                      _e("b", "Deep Learning A Survey", year="2021")]})
+    assert not any("possible duplicate" in w for w in r2.warnings)
+
+
+def test_journal_macros_expanded():
+    def j(v):
+        return normalize_entry(BibEntry("k", "article", {"journal": v})).fields["journal"]
+    assert j(r"\apj") == "The Astrophysical Journal"
+    assert j(r"{\mnras}") == "Monthly Notices of the Royal Astronomical Society"
+    assert j(r"\nat") == "Nature"
+    assert j(r"\unknownmacro") == r"\unknownmacro"
+
+
+def test_year_raw_kept_when_unparseable():
+    def fields(**kw):
+        return normalize_entry(BibEntry("k", "misc", kw)).fields
+    f = fields(year="to appear")
+    assert f["year"] is None and f["year_raw"] == "to appear"
+    assert fields(year="n.d.")["year_raw"] == "n.d."
+    assert "year_raw" not in fields(year="2020")
+    assert "year_raw" not in fields(title="x")
+
+
+def test_unify_year_raw_dropped_when_year_known():
+    r = unify_bibliography("x", {
+        1: [_e("a", "Some Long Title Here")],
+        2: [_e("a", "Some Long Title Here", year="to appear")]})
+    f = r.entries[0].fields
+    assert len(r.entries) == 1 and f["year"] == 2020 and "year_raw" not in f
+
+
+def test_doi_from_note_requires_prefix_and_is_weak():
+    def f(**kw):
+        return normalize_entry(BibEntry("k", "misc", kw)).fields
+    a = f(note="doi:10.1000/ABC.1")
+    assert a["doi"] == "10.1000/abc.1" and a["doi_source"] == "note"
+    assert f(note="Dataset at 10.1000/xyz")["doi"] is None       # no prefix
+    own = f(doi="10.1000/own", note="doi:10.1000/other")
+    assert own["doi"] == "10.1000/own" and "doi_source" not in own
+
+
+def test_note_doi_is_not_a_merge_key_and_never_beats_own_doi():
+    r = unify_bibliography("x", {1: [
+        _e("a", "First Distinct Paper Title", note="Data: doi:10.1000/ds"),
+        _e("b", "Second Unrelated Study Name", author="Jones, Ann", year="2021",
+           note="Data: doi:10.1000/ds"),
+    ]})
+    assert len(r.entries) == 2
+    r2 = unify_bibliography("x", {
+        1: [_e("a", "Some Long Title Here", doi="10.1000/own")],
+        2: [_e("a", "Some Long Title Here", note="doi:10.1000/other")]})
+    f = r2.entries[0].fields
+    assert len(r2.entries) == 1 and f["doi"] == "10.1000/own"
+    assert "doi_source" not in f
