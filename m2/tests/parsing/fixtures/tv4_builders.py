@@ -376,10 +376,9 @@ EXPECTED: dict[str, dict] = {
             "h2": ("subsection", "Sub"),
             "s1": ("sentence", "S."),
             "h3": ("section", "A2"),
-            "h4": ("subsection", "Sub"),
         },
         "hierarchy": [(1, "h1", "root1", 1), (1, "h2", "h1", 2), (1, "s1", "h2", 3),
-                      (2, "h3", "root2", 1), (2, "h4", "h3", 2), (2, "s1", "h4", 3)],
+                      (2, "h3", "root2", 1), (2, "h2", "h3", 2), (2, "s1", "h2", 3)],
     },
 }
 

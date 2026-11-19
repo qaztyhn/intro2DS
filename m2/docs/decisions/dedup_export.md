@@ -1,4 +1,4 @@
-> Historical component handoff. See [integration decisions](../INTEGRATION.md) for current behavior, especially no-TeX versions (QA only, no synthetic root). Structural dedup policy remains subject to group review.
+> Historical component handoff. The current [dedup policy](../DEDUP_POLICY.md) supersedes parent-dependent D2 matching. See [integration decisions](../INTEGRATION.md) for no-TeX versions (QA only, no synthetic root). Proposals below describe the original implementation, not current behavior.
 
 # TV4 — Tài liệu quyết định kỹ thuật (Dedup, Export, QA)
 
