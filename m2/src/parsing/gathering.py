@@ -22,7 +22,9 @@ DEFINITIONS = {'newcommand', 'renewcommand', 'providecommand', 'DeclareRobustCom
 DIRECTIVES = re.compile(r'\\(?:input|include|import|subimport|bibliography|addbibresource|documentclass)(?![A-Za-z@])')
 COMMAND = re.compile(r'\\([A-Za-z@]+|[^\n])')
 SPECIAL = re.compile(r'[\\%]')
-CONDITIONAL_MACROS = {'ifthenelse', 'ifdef', 'ifboolexpr', 'ifstrequal', 'IfFileExists'}
+CONDITIONAL_MACROS = {'ifthenelse': 3, 'ifdef': 3, 'ifboolexpr': 3,
+                      'ifstrequal': 4, 'IfFileExists': 3, 'ifdraft': 2,
+                      'ifcsdef': 3, 'ifcsundef': 3}
 
 
 def is_conditional(name):
@@ -128,8 +130,19 @@ def definition(text, name, end):
     return bodies, body[1]
 
 
-def conditional(text, end):
+def defined_command(text, end):
+    start = spaces(text, end)
+    if start < len(text) and text[start] == '*': start = spaces(text, start + 1)
+    target = group(text, start)
+    token = target[0].strip() if target else text[start:]
+    match = COMMAND.match(token)
+    return match[1] if match else None
+
+
+def conditional(text, end, non_conditionals=(), conditional_flags=()):
     depth, index, otherwise = 1, end, None
+    ordinary = set(non_conditionals)
+    flags = set(conditional_flags)
     while index < len(text):
         if text[index] != '\\': index += 1; continue
         special = literal(text, index)
@@ -137,12 +150,26 @@ def conditional(text, end):
         name, after = command(text, index)
         if name == 'newif':
             target = spaces(text, after)
-            _, index = command(text, target) if target < len(text) and text[target] == '\\' else ('', after)
+            flag, index = command(text, target) if target < len(text) and text[target] == '\\' else ('', after)
+            flags.add(flag)
+            ordinary.discard(flag)
             continue
         if name in DEFINITIONS:
             body = definition(text, name, after)
-            if body: index = body[1]; continue
-        if is_conditional(name):
+            if body:
+                if name not in ('newenvironment', 'renewenvironment'):
+                    ordinary.add(defined_command(text, after))
+                index = body[1]; continue
+        if name in CONDITIONAL_MACROS and name not in ordinary and name not in flags:
+            # Package conditionals use arguments, not a matching primitive \fi.
+            for _ in range(CONDITIONAL_MACROS[name]):
+                value = group(text, after)
+                if value: after = value[1]
+                elif text[spaces(text, after):].startswith('\\'):
+                    _, after = command(text, spaces(text, after))
+            index = after
+            continue
+        if (is_conditional(name) or name in flags) and name not in ordinary:
             depth += 1
         elif name == 'fi':
             depth -= 1
@@ -154,9 +181,11 @@ def conditional(text, end):
     return None
 
 
-def events(text):
+def events(text, non_conditionals=None, conditional_flags=None):
     """Yield nonoverlapping (start, end, kind, payload) lexical events."""
     index = 0
+    ordinary = set() if non_conditionals is None else non_conditionals
+    flags = set() if conditional_flags is None else conditional_flags
     while index < len(text):
         if text[index] != '\\': index += 1; continue
         start = index
@@ -166,18 +195,23 @@ def events(text):
         index = end
         if name == 'newif':
             target = spaces(text, end)
-            if target < len(text) and text[target] == '\\': _, index = command(text, target)
+            if target < len(text) and text[target] == '\\':
+                flag, index = command(text, target)
+                flags.add(flag)
+                ordinary.discard(flag)
             continue
         if name in DEFINITIONS:
             body = definition(text, name, end)
             if body:
                 index = body[1]
+                if name not in ('newenvironment', 'renewenvironment'):
+                    ordinary.add(defined_command(text, end))
                 yield start, index, 'definition', body[0]
             else:
                 yield start, end, 'unsupported', 'MALFORMED_MACRO_DEFINITION'
             continue
-        if is_conditional(name):
-            branches = conditional(text, end)
+        if (is_conditional(name) or name in flags) and name not in ordinary:
+            branches = conditional(text, end, ordinary, flags)
             if branches:
                 yes, no, index = branches
                 payload = yes if name == 'iftrue' else no if name == 'iffalse' else None
@@ -189,12 +223,12 @@ def events(text):
         if name == 'unless':
             after = spaces(text, end)
             _, condition_end = command(text, after) if after < len(text) and text[after] == '\\' else ('', after)
-            branches = conditional(text, condition_end)
+            branches = conditional(text, condition_end, ordinary, flags)
             index = branches[2] if branches else len(text)
             yield start, index, 'conditional', None
             continue
-        if name in CONDITIONAL_MACROS:
-            for argument in range(3):
+        if name in CONDITIONAL_MACROS and name not in ordinary and name not in flags:
+            for argument in range(CONDITIONAL_MACROS[name]):
                 value = group(text, index)
                 if value: index = value[1]
                 elif argument == 0:
@@ -261,6 +295,8 @@ class Context:
         self.bytes_read = 0
         self.warnings, self.included, self.bibs = [], [], {}
         self.pending_warnings = {}
+        self.non_conditionals = set()
+        self.conditional_flags = set()
         self.root, self.includeonly = None, None
 
     def warn(self, code, origin='', detail=''):
@@ -314,7 +350,8 @@ class Context:
             if not PurePosixPath(path).suffix: path += suffix
             if path in self.names: candidates.add(path)
         if not candidates:
-            self.warn('MISSING_DEPENDENCY' if safe else 'UNSAFE_PATH', origin, raw)
+            missing_code = 'MISSING_BIB_RESOURCE' if suffix == '.bib' else 'MISSING_DEPENDENCY'
+            self.warn(missing_code if safe else 'UNSAFE_PATH', origin, raw)
             return None
         if len(candidates) > 1:
             self.warn('AMBIGUOUS_PATH', origin, raw + ' -> ' + ', '.join(sorted(candidates)))
@@ -338,7 +375,7 @@ class Context:
     def expand_text(self, text, origin, stack, depth=0):
         if depth > MAX_DEPTH: raise GatheringError('NESTING_LIMIT', origin)
         pieces, position, size = [], 0, 0
-        for start, end, kind, payload in events(text):
+        for start, end, kind, payload in events(text, self.non_conditionals, self.conditional_flags):
             replacement = text[start:end]
             if kind == 'definition':
                 if DIRECTIVES.search(payload): self.warn('DEFERRED_MACRO_DIRECTIVE', origin)
@@ -389,7 +426,7 @@ class Context:
         return ''.join(pieces)
 
 
-def gather_source(source: SourceVersion) -> GatheredDocument:
+def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocument:
     """Gather one version. included_files is first-visit TeX order, not dedup.
 
     Root ambiguity is failed. Recoverable dependencies produce partial output
@@ -421,9 +458,19 @@ def gather_source(source: SourceVersion) -> GatheredDocument:
                 except (OSError, UnicodeError, ValueError) as exc:
                     if isinstance(exc, GatheringError): raise
                     raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
-        if len(roots) != 1:
+        if selected_root is not None:
+            # The choice must still be an active, manifest-listed root. Never
+            # read an arbitrary path or silently accept a stale configuration.
+            selected = relative_path(selected_root)
+            if selected not in roots:
+                raise GatheringError('INVALID_ROOT_SELECTION', selected)
+            context.root = selected
+            context.warn('ROOT_SELECTED_BY_CONFIG', selected,
+                         'candidates=' + ', '.join(roots))
+        elif len(roots) != 1:
             raise GatheringError('AMBIGUOUS_ROOT' if roots else 'NO_ROOT', ', '.join(roots))
-        context.root = roots[0]
+        else:
+            context.root = roots[0]
         result.root_file = context.root
         result.latex = context.expand(context.root) or ''
         result.included_files, result.bib_files = context.included, context.bibs
@@ -434,3 +481,13 @@ def gather_source(source: SourceVersion) -> GatheredDocument:
         result.warnings = list(context.warnings) if context else []
         result.warnings.append(f'{source.arxiv_id}v{source.version} stage=gather {getattr(exc, "code", "INVALID_SOURCE")}: {exc}')
     return result
+
+
+def gather_source(source: SourceVersion) -> GatheredDocument:
+    """Contract interface: ambiguous roots fail unless a separate choice is supplied."""
+    return _gather_source(source)
+
+
+def gather_source_with_root(source: SourceVersion, root_file: str) -> GatheredDocument:
+    """Gather a reviewed root choice without changing the team's public interface."""
+    return _gather_source(source, selected_root=root_file)

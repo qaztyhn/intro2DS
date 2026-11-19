@@ -99,13 +99,17 @@ inputs, partial gathering, version/publication failures, export and validation.
 It does not replace a real publication pilot or a CPU-only Colab benchmark.
 No corpus processing or notebook modification was performed during integration.
 
-Before a full run, review representative real papers from each member and confirm
-the proposed structural dedup policy in `decisions/dedup_export.md`: contextual
-heading/list identity is retained to avoid mixing children, whereas prose/math/
-figures use exact normalized content. This can retain equal headings under changed
-parents and needs an explicit group decision against the full-text requirement.
-That handoff document contains historical proposals; this integration document
-overrides its obsolete no-TeX-root behavior. Gathering remains a bounded literal
+Before a full run, review representative real papers from each member. The current
+dedup policy in `DEDUP_POLICY.md` follows exact content matching across versions
+for every kind, independent of parent or position. Distinct structural occurrences
+within a version and cycle-unsafe reuse require separate representatives and
+explicit warnings to preserve the hierarchy under its fixed four-column schema.
+The handoff in `decisions/dedup_export.md` contains historical proposals; current
+policy supersedes its parent-dependent matching and no-TeX-root behavior.
+Gathering remains a bounded literal
 TeX interpreter, with unsupported constructs explicitly partial/failed.
 Missing bibliography sources, unsupported TeX and real-data coverage remain QA
 limitations; passing unit tests does not establish completion of milestone 2.
+
+For reviewed root selection, conservative bibliography field recovery and richer
+per-version completeness diagnostics, see [recovery behavior](RECOVERY.md).

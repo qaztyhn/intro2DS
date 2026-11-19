@@ -180,15 +180,19 @@ def test_headings_with_same_title_under_different_parents_stay_separate():
     assert len(set(parents.values())) == 2
 
 
-def test_identical_sibling_headings_are_distinguished_by_index():
+def test_identical_sibling_headings_keep_distinct_occurrences():
     elements, _ = run(build("tv4_identical_sibling_headings"))
     assert len([e for e in elements if e["content"] == "Results"]) == 2
 
 
-def test_renamed_parent_makes_child_heading_a_new_element():
-    """D2 documented cost: same subsection title under a renamed section."""
-    elements, _ = run(build("tv4_renamed_parent_section"))
-    assert len([e for e in elements if e["content"] == "Sub"]) == 2
+def test_renamed_parent_reuses_child_heading_with_version_specific_edges():
+    """M2 full-text matching does not require the same parent across versions."""
+    elements, hierarchy = run(build("tv4_renamed_parent_section"))
+    subs = [e['element_id'] for e in elements if e['content'] == 'Sub']
+    assert len(subs) == 1
+    edges = [r for r in hierarchy if r['element_id'] == subs[0]]
+    assert {r['version'] for r in edges} == {1, 2}
+    assert len({r['parent_id'] for r in edges}) == 2
     assert len([e for e in elements if e["content"] == "S."]) == 1
 
 

@@ -1,18 +1,15 @@
 """TV4 — element deduplication across the versions of one publication.
 
-Behaviour is specified by ``m2/docs/decisions/dedup_export.md`` (D1-D10) and locked by
-``tests/parsing/test_deduplication.py``. Nothing here normalizes text: ``content``
+Behaviour is specified by ``m2/docs/DEDUP_POLICY.md`` and locked by the tests in
+``m2/tests/parsing``. Nothing here normalizes text: ``content``
 is compared exactly as TV2 produced it, never fuzzily, and never across
 publications.
 
-Identity of a non-root node (D2):
-
-* group A (``sentence``, ``equation``, ``figure``, ``paragraph``) is identified
-  by ``(kind, content)``;
-* every other kind is identified by ``(kind, content, parent_ref, n)``, where
-  ``parent_ref`` is the parent's element id (``None`` when the parent is the
-  version root) and ``n`` counts earlier siblings with the same ``(kind,
-  content)`` under the same parent.
+All non-root kinds match exact ``(kind, content)`` across versions, independently
+of parent and position. Distinct structural occurrences within one version use
+separate representatives to avoid mixing their children in four-column hierarchy.
+Representatives are reused in deterministic first-encounter order in later
+versions. Unsafe reuse that would create a cycle uses another representative.
 
 Roots are never deduplicated: each usable version gets ``<paper_key>#root<N>``.
 """
@@ -26,7 +23,7 @@ from m1.src.utils.common import paper_key
 if TYPE_CHECKING:  # contracts.py belongs to the team and may not be merged yet
     from .contracts import ParsedDocument, ParsedNode
 
-# D2: kinds whose ``content`` is the full covered text and therefore identifies them.
+# Kinds that can share even within one version without merging structural branches.
 CONTENT_KEYED_KINDS = frozenset({"sentence", "equation", "figure", "paragraph"})
 
 # D4: id prefix per kind. Roots use ``ROOT_PREFIX`` + version instead of a counter.
@@ -92,13 +89,12 @@ def _assert_acyclic(edges: Iterable[tuple[str, str]], arxiv_id: str, version: in
 class _Frame:
     """One node whose children are being walked (explicit stack, no recursion)."""
 
-    __slots__ = ("node", "element_id", "children", "seen")
+    __slots__ = ("node", "element_id", "children")
 
     def __init__(self, node: "ParsedNode", element_id: str | None) -> None:
         self.node = node
         self.element_id = element_id  # None for the version root
         self.children = iter(node.children)
-        self.seen: dict[tuple[str, str], int] = {}
 
 
 class _Publication:
@@ -107,7 +103,9 @@ class _Publication:
     def __init__(self, arxiv_id: str) -> None:
         self.arxiv_id = arxiv_id
         self.key = paper_key(arxiv_id)
-        self.table: dict[tuple, str] = {}
+        self.table: dict[tuple[str, str], list[str]] = {}
+        self.used_structural: set[str] = set()
+        self.parents: dict[str, set[str]] = {}
         self.counters: dict[str, int] = {}
         self.elements: list[dict[str, Any]] = []
         self.hierarchy: list[dict[str, Any]] = []
@@ -138,27 +136,37 @@ class _Publication:
     def _root(self, version: int, content: str) -> str:
         return self._emit(f"{self.key}#{ROOT_PREFIX}{version}", ROOT_KIND, content)
 
-    def _identify(self, node: "ParsedNode", frame: _Frame, ancestors: set[str],
+    def _would_cycle(self, element_id: str, parent_id: str) -> bool:
+        pending, visited = [parent_id], set()
+        while pending:
+            current = pending.pop()
+            if current == element_id:
+                return True
+            if current not in visited:
+                visited.add(current)
+                pending.extend(self.parents.get(current, ()))
+        return False
+
+    def _identify(self, node: "ParsedNode", parent_id: str, ancestors: set[str],
                   version: int) -> str:
-        if node.kind in CONTENT_KEYED_KINDS:
-            key: tuple = (node.kind, node.content)
-            element_id = self.table.get(key)
-            if element_id is None:
-                element_id = self.table[key] = self._new_element(node, version)
-            elif element_id in ancestors:
-                # Equal text nested in itself: reusing would create a cycle (D2).
-                self.warnings.append(
-                    f"v{version}: {node.kind} {element_id} appears inside itself; "
-                    f"created a separate element")
-                element_id = self._new_element(node, version)
-            return element_id
-        same = (node.kind, node.content)
-        index = frame.seen.get(same, 0)
-        frame.seen[same] = index + 1
-        key = (node.kind, node.content, frame.element_id, index)
-        element_id = self.table.get(key)
-        if element_id is None:
-            element_id = self.table[key] = self._new_element(node, version)
+        key = (node.kind, node.content)
+        candidates = self.table.setdefault(key, [])
+        structural = node.kind not in CONTENT_KEYED_KINDS
+        for element_id in candidates:
+            if structural and element_id in self.used_structural:
+                continue
+            if element_id not in ancestors and not self._would_cycle(element_id, parent_id):
+                if structural:
+                    self.used_structural.add(element_id)
+                return element_id
+        element_id = self._new_element(node, version)
+        if candidates:
+            reason = ('distinct structural occurrence in this version' if structural
+                      else 'appears inside itself or reuse would create a cycle')
+            self.warnings.append(f'v{version}: {node.kind} {reason}; created a separate element')
+        candidates.append(element_id)
+        if structural:
+            self.used_structural.add(element_id)
         return element_id
 
     # -- one version ------------------------------------------------------ #
@@ -192,6 +200,8 @@ class _Publication:
         if not isinstance(root.content, str):
             raise DedupError("root content is not a string", self.arxiv_id, version)
         root_id = self._root(version, root.content)
+        self.used_structural = set()
+        self.parents = {}
         frames = [_Frame(root, None)]
         on_path = {id(root)}
         ancestors: set[str] = set()
@@ -212,13 +222,14 @@ class _Publication:
             if id(child) in on_path:
                 raise DedupError(f"node {child.local_id!r} is its own descendant",
                                  self.arxiv_id, version)
-            element_id = self._identify(child, frame, ancestors, version)
-            position += 1
             parent_id = root_id if frame.element_id is None else frame.element_id
+            element_id = self._identify(child, parent_id, ancestors, version)
+            position += 1
             self.hierarchy.append({"arxiv_id": self.arxiv_id, "version": version,
                                    "element_id": element_id, "parent_id": parent_id,
                                    "position": position})
             edges.append((element_id, parent_id))
+            self.parents.setdefault(element_id, set()).add(parent_id)
             if child.children:
                 frames.append(_Frame(child, element_id))
                 on_path.add(id(child))
