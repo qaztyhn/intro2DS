@@ -225,9 +225,8 @@ def resolve_crossrefs(entries: list[BibEntry]) -> tuple[list[BibEntry], list[str
 # \bibitem / thebibliography / .bbl
 # --------------------------------------------------------------------------
 _COMMENT = re.compile(r"(?<!\\)%[^\n]*")
-_BIBITEM = re.compile(
-    r"\\bibitem\s*(?:\[((?:[^\[\]{}]|\{[^{}]*\})*)\])?\s*\{([^{}]*)\}"
-)
+_URL_ARG = re.compile(r"\\(?:url|href)\s*\{[^{}]*\}")
+_BIBITEM_CMD = re.compile(r"\\bibitem(?![A-Za-z])")
 _END_BIB = re.compile(r"\\end\s*\{thebibliography\}")
 _NEWBLOCK = re.compile(r"\\newblock\b")
 _DOI = re.compile(r"10\.\d{4,9}/[^\s,;{}\]\"<>]+")
@@ -236,10 +235,38 @@ _ARXIV = re.compile(
     r"arXiv\s*:\s*(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})", re.I
 )
 _YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_PAGES = re.compile(
+    r"\b(?:pp?\.\s*|pp?\s+|pages?\s+)~?\s*\d+(?:\s*(?:-{1,3}|\u2013|\u2014)\s*\d+)?"
+    r"|(?<![\d.])\d{1,6}\s*(?:-{1,3}|\u2013|\u2014)\s*\d{1,6}"
+    r"(?!\d|\s*[-\u2013\u2014]\s*\d)",
+    re.I,
+)
+_VENUE_HINT = re.compile(
+    r"^\s*in\b|\b(?:conference|workshop|symposium|congress|meeting|colloquium)\b",
+    re.I,
+)
 
 
 def _collapse(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _strip_comments(text: str) -> str:
+    """Remove LaTeX comments but keep '%' inside \\url{...} / \\href{...}."""
+    saved: list[str] = []
+
+    def protect(m: re.Match) -> str:
+        saved.append(m.group(0))
+        return f"\x00{len(saved) - 1}\x00"
+
+    text = _COMMENT.sub("", _URL_ARG.sub(protect, text))
+    return re.sub(r"\x00(\d+)\x00", lambda m: saved[int(m.group(1))], text)
+
+
+def _venue_text(block: str) -> str:
+    m = _EMPH.search(block)
+    text = m.group(1) if m else block
+    return re.sub(r"^\s*in\b\s*:?\s*", "", text, flags=re.I).strip()
 
 
 def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
@@ -257,8 +284,9 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
     if m:
         fields["eprint"] = m.group(1)
 
-    # Year: last 4-digit year outside URLs / DOIs / arXiv ids.
+    # Year: last 4-digit year outside URLs / DOIs / arXiv ids / page ranges.
     cleaned = _ARXIV.sub(" ", _DOI.sub(" ", _URL.sub(" ", body)))
+    cleaned = _PAGES.sub(" ", cleaned)
     years = _YEAR.findall(cleaned)
     if years:
         fields["year"] = years[-1]
@@ -269,31 +297,77 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
         fields["author"] = blocks[0]
         fields["title"] = blocks[1]
         if len(blocks) >= 3:
-            fields["journal"] = blocks[2]
+            if _VENUE_HINT.search(blocks[2]):
+                fields["booktitle"] = _venue_text(blocks[2])
+            else:
+                fields["journal"] = blocks[2]
     return fields
+
+
+def _read_label(text: str, i: int) -> tuple[str, int] | None:
+    """text[i] == '['. Label ends at the first ']' outside any braces."""
+    depth, j, n = 0, i + 1, len(text)
+    while j < n:
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth < 0:
+                return None
+        elif c == "]" and depth == 0:
+            return text[i + 1:j], j + 1
+        j += 1
+    return None
+
+
+def _bibitem_head(text: str, m: re.Match) -> tuple[str | None, str, int] | None:
+    """Parse the optional [label] and the {key} after \\bibitem."""
+    i = _skip_ws(text, m.end())
+    label = None
+    if i < len(text) and text[i] == "[":
+        got = _read_label(text, i)
+        if got is None:
+            return None
+        label, i = got
+        i = _skip_ws(text, i)
+    if i >= len(text) or text[i] != "{":
+        return None
+    try:
+        key, i = _read_braced(text, i)
+    except ValueError:
+        return None
+    return label, key.strip(), i
 
 
 def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
     """Parse \\bibitem entries from thebibliography / .bbl text."""
-    text = _COMMENT.sub("", text)
-    matches = list(_BIBITEM.finditer(text))
-    entries: list[BibEntry] = []
+    text = _strip_comments(text)
+    heads: list[tuple[int, int, str | None, str]] = []
     warnings: list[str] = []
-    for idx, m in enumerate(matches):
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-        body = text[m.end():end]
+    for m in _BIBITEM_CMD.finditer(text):
+        head = _bibitem_head(text, m)
+        if head is None:
+            warnings.append(f"malformed \\bibitem at offset {m.start()}; skipped")
+            continue
+        label, key, body_start = head
+        heads.append((m.start(), body_start, label, key))
+
+    entries: list[BibEntry] = []
+    for idx, (_, body_start, label, key) in enumerate(heads):
+        end = heads[idx + 1][0] if idx + 1 < len(heads) else len(text)
+        body = text[body_start:end]
         stop = _END_BIB.search(body)
         if stop:
             body = body[:stop.start()]
-        key = m.group(2).strip()
         if not key:
             warnings.append(f"\\bibitem #{idx + 1} has an empty key; skipped")
             continue
-        entries.append(BibEntry(
-            original_key=key,
-            entry_type="misc",
-            fields=_bibitem_fields(body, m.group(1)),
-        ))
+        entries.append(BibEntry(original_key=key, entry_type="misc",
+                                fields=_bibitem_fields(body, label)))
     return entries, warnings
 
 
@@ -431,8 +505,6 @@ _COMMA = re.compile(r",")
 
 
 def _format_name(name: str) -> str | None:
-    if name.strip().lower() == "others":
-        return None
     pieces = _split_depth0(name, _COMMA)
     if len(pieces) == 2:
         text = f"{pieces[1]} {pieces[0]}"
@@ -448,19 +520,49 @@ def _authors_from_bibtex(s: str) -> list[str]:
     return [n for n in names if n]
 
 
+_VANCOUVER = re.compile(r"^(\S.*?)\s+([A-Z]{1,3})\.?$")
+_ET_AL = re.compile(r"(?:^|[\s,])et\s*al\.?$", re.I)
+
+
+def _strip_et_al(authors: list[str]) -> tuple[list[str], bool]:
+    """Drop 'others' / 'et al.' markers. Returns (authors, was_truncated)."""
+    out: list[str] = []
+    truncated = False
+    for a in authors:
+        a = a.strip()
+        if a.casefold().rstrip(".") in {"others", "et al", "etal"}:
+            truncated = True
+            continue
+        m = _ET_AL.search(a)
+        if m:
+            a = a[:m.start()].rstrip(" ,")
+            truncated = True
+        if a:
+            out.append(a)
+    return out, truncated
+
+
 def _authors_from_bibitem(s: str) -> list[str]:
     s = re.sub(r"(?<![A-Z])\.\s*$", "", s.strip())
     s = re.sub(r",\s+and\s+", " and ", s)
     result: list[str] = []
     for chunk in _split_depth0(s, _AND):
+        plains = [clean_text(t) for t in _split_depth0(chunk, _COMMA)]
+        plains = [p for p in plains if p]
+        # Vancouver style "Smith J, Doe AB": only when every author matches.
+        if len(plains) >= 2 and all(_VANCOUVER.match(p) for p in plains):
+            for p in plains:
+                m = _VANCOUVER.match(p)
+                initials = " ".join(f"{c}." for c in m.group(2))
+                result.append(f"{initials} {m.group(1)}")
+            continue
         merged: list[str] = []
-        for tok in _split_depth0(chunk, _COMMA):
-            plain = clean_text(tok)
+        for plain in plains:
             if merged and _INITIALS.match(plain):
                 merged[-1] = f"{plain} {merged[-1]}"
             else:
                 merged.append(plain)
-        result.extend(n for n in merged if n and n.lower() != "others")
+        result.extend(merged)
     return result
 
 
@@ -518,6 +620,7 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
         authors = _authors_from_bibitem(raw_auth)
     else:
         authors = _authors_from_bibtex(raw_auth)
+    authors, truncated = _strip_et_al(authors)
 
     jr = f.get("journal") or f.get("journaltitle") or ""
     if from_bibitem:
@@ -533,6 +636,10 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
         journal=journal,
         url=_url(f),
     )
+    if truncated:
+        f["authors_truncated"] = True
+    if isinstance(f.get("booktitle"), str):
+        f["booktitle"] = clean_text(f["booktitle"]) or None
     etype = entry.entry_type.strip().lower()
     return BibEntry(
         original_key=entry.original_key,
@@ -594,7 +701,7 @@ def _signature(f: dict) -> _Sig:
         title=_alnum(f.get("title")),
         author=_alnum(last),
         year=f.get("year") if isinstance(f.get("year"), int) else None,
-        raw=_alnum(f.get("raw")),
+        raw=_alnum(clean_text(_NEWBLOCK.sub(" ", str(f.get("raw") or "")))),
     )
 
 
