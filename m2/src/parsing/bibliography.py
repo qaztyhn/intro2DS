@@ -603,6 +603,65 @@ def _url(fields: dict) -> str | None:
     return m2.group(0).rstrip(".,;)") if m2 else None
 
 
+_JOURNAL_MACROS = {
+    "aj": "The Astronomical Journal", "actaa": "Acta Astronomica",
+    "araa": "Annual Review of Astronomy and Astrophysics",
+    "apj": "The Astrophysical Journal", "apjl": "The Astrophysical Journal Letters",
+    "apjs": "The Astrophysical Journal Supplement Series", "ao": "Applied Optics",
+    "apss": "Astrophysics and Space Science", "aap": "Astronomy and Astrophysics",
+    "aapr": "The Astronomy and Astrophysics Review",
+    "aaps": "Astronomy and Astrophysics Supplement Series",
+    "azh": "Astronomicheskii Zhurnal",
+    "baas": "Bulletin of the American Astronomical Society",
+    "caa": "Chinese Astronomy and Astrophysics",
+    "cjaa": "Chinese Journal of Astronomy and Astrophysics", "icarus": "Icarus",
+    "jcap": "Journal of Cosmology and Astroparticle Physics",
+    "jrasc": "Journal of the Royal Astronomical Society of Canada",
+    "memras": "Memoirs of the Royal Astronomical Society",
+    "mnras": "Monthly Notices of the Royal Astronomical Society",
+    "na": "New Astronomy", "nar": "New Astronomy Review",
+    "pra": "Physical Review A", "prb": "Physical Review B",
+    "prc": "Physical Review C", "prd": "Physical Review D",
+    "pre": "Physical Review E", "prl": "Physical Review Letters",
+    "pasa": "Publications of the Astronomical Society of Australia",
+    "pasp": "Publications of the Astronomical Society of the Pacific",
+    "pasj": "Publications of the Astronomical Society of Japan",
+    "qjras": "Quarterly Journal of the Royal Astronomical Society",
+    "rmxaa": "Revista Mexicana de Astronomia y Astrofisica",
+    "skytel": "Sky and Telescope", "solphys": "Solar Physics",
+    "sovast": "Soviet Astronomy", "ssr": "Space Science Reviews",
+    "zap": "Zeitschrift fuer Astrophysik", "nat": "Nature",
+    "iaucirc": "International Astronomical Union Circular",
+    "aplett": "Astrophysics Letters", "apspr": "Astrophysics Space Physics Research",
+    "bain": "Bulletin Astronomical Institute of the Netherlands",
+    "fcp": "Fundamental Cosmic Physics", "gca": "Geochimica Cosmochimica Acta",
+    "grl": "Geophysical Research Letters", "jcp": "Journal of Chemical Physics",
+    "jgr": "Journal of Geophysical Research",
+    "jqsrt": "Journal of Quantitative Spectroscopy and Radiative Transfer",
+    "memsai": "Memorie della Societa Astronomica Italiana",
+    "nphysa": "Nuclear Physics A", "physrep": "Physics Reports",
+    "physscr": "Physica Scripta", "planss": "Planetary and Space Science",
+    "procspie": "Proceedings of the SPIE",
+}
+_JOURNAL_MACRO = re.compile(r"^\\([A-Za-z]+)\.?$")
+_NOTE_DOI = re.compile(
+    r"(?:\bdoi\s*:\s*|doi\.org/|\\doi\s*\{)\s*(10\.\d{4,9}/[^\s,;{}\]\"<>]+)", re.I)
+
+
+def _expand_journal(journal: str) -> str:
+    m = _JOURNAL_MACRO.match(journal.strip())
+    return _JOURNAL_MACROS.get(m.group(1).lower(), journal) if m else journal
+
+
+def _doi_from_note(fields: dict) -> str | None:
+    """DOI mentioned in note/howpublished; only with an explicit DOI prefix."""
+    for key in ("note", "howpublished"):
+        m = _NOTE_DOI.search(str(fields.get(key) or ""))
+        if m:
+            return m.group(1).rstrip(".,;)").lower()
+    return None
+
+
 def normalize_entry(entry: BibEntry) -> BibEntry:
     """Return a new BibEntry whose fields carry canonical title/authors/year/
     doi/journal/url. All original fields are kept."""
@@ -626,13 +685,24 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
     if from_bibitem:
         m = _EMPH.search(jr)
         jr = m.group(1) if m else jr
-    journal = clean_text(jr) or None
+    journal = _expand_journal(clean_text(jr)) or None
+
+    year = _year(f)
+    if year is None:
+        raw_year = clean_text(f.get("year") or f.get("date"))
+        if raw_year:
+            f["year_raw"] = raw_year  # present in the source but not a year
+    doi = _doi(f)
+    if doi is None:
+        doi = _doi_from_note(f)
+        if doi:
+            f["doi_source"] = "note"
 
     f.update(
         title=title or None,
         authors=authors,
-        year=_year(f),
-        doi=_doi(f),
+        year=year,
+        doi=doi,
         journal=journal,
         url=_url(f),
     )
@@ -646,6 +716,7 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
         entry_type=_TYPE_ALIAS.get(etype, etype),
         fields=f,
     )
+
 
 # --------------------------------------------------------------------------
 # Cross-version unification
@@ -668,6 +739,8 @@ class _Sig(NamedTuple):
     author: str
     year: int | None
     raw: str
+    authors: tuple[str, ...]
+    words: int
 
 
 def _fold(s: object) -> str:
@@ -677,6 +750,10 @@ def _fold(s: object) -> str:
 
 def _alnum(s: object) -> str:
     return re.sub(r"[^0-9a-z]+", "", _fold(s))
+
+
+def _title_tokens(title: object) -> set[str]:
+    return set(re.findall(r"[0-9a-z]+", _fold(title)))
 
 
 def _eprint(f: dict) -> str | None:
@@ -695,13 +772,18 @@ def _eprint(f: dict) -> str | None:
 def _signature(f: dict) -> _Sig:
     authors = f.get("authors") or []
     last = authors[0].split()[-1] if authors and authors[0].split() else ""
+    doi = f.get("doi") or None
+    if f.get("doi_source") == "note":
+        doi = None  # weak evidence: never a merge key
     return _Sig(
-        doi=f.get("doi") or None,
+        doi=doi,
         eprint=_eprint(f),
         title=_alnum(f.get("title")),
         author=_alnum(last),
         year=f.get("year") if isinstance(f.get("year"), int) else None,
         raw=_alnum(clean_text(_NEWBLOCK.sub(" ", str(f.get("raw") or "")))),
+        authors=tuple(_alnum(a) for a in authors),
+        words=len(_title_tokens(f.get("title"))),
     )
 
 
@@ -726,11 +808,13 @@ def _match(a: _Sig, b: _Sig) -> bool:
     if a.title and b.title:
         if a.title != b.title:
             return False
-        if a.year and b.year and a.year != b.year:
-            return False
         if a.author and b.author and a.author != b.author:
             return False
-        return True
+        if a.year and b.year:
+            return a.year == b.year
+        # A year is missing on one side: the title alone is weak evidence, so
+        # require identical full author lists and a title of >= 3 words.
+        return bool(a.authors) and a.authors == b.authors and min(a.words, b.words) >= 3
     return bool(a.raw and b.raw and a.raw == b.raw)
 
 
@@ -749,18 +833,25 @@ def _fallback_key(fields: dict) -> str:
 def _merge_cluster(members: list, warnings: list[str], tag: str) -> tuple[str, dict]:
     fields: dict[str, object] = {}
     etype = "misc"
+    has_own_doi = any(e.fields.get("doi") and e.fields.get("doi_source") != "note"
+                      for _, e, _ in members)
     for ver, entry, _ in members:
         if entry.entry_type and entry.entry_type != "misc":
             etype = entry.entry_type
         for name, value in entry.fields.items():
             if _is_empty(value):
                 continue
+            if (has_own_doi and name in ("doi", "doi_source")
+                    and entry.fields.get("doi_source") == "note"):
+                continue  # a DOI found in a note never overrides an own DOI
             value = list(value) if isinstance(value, list) else value
             if name in fields and fields[name] != value and name in _CANON_FIELDS:
                 warnings.append(
                     f"{tag} stage=bib_unify v{ver}: conflicting '{name}' for key "
                     f"'{entry.original_key}'; kept value of the latest version")
             fields[name] = value
+    if fields.get("year") is not None:
+        fields.pop("year_raw", None)
     for name, default in (("title", None), ("authors", []), ("year", None),
                           ("doi", None), ("journal", None), ("url", None)):
         fields.setdefault(name, default)
@@ -771,6 +862,30 @@ def _merge_cluster(members: list, warnings: list[str], tag: str) -> tuple[str, d
             keys.append(entry.original_key)
     fields["source_keys"] = source_keys
     return etype, fields
+
+
+def _possible_duplicates(tag: str, entries: list[BibEntry]) -> list[str]:
+    """Report (never merge) entries that look like the same work."""
+    buckets: dict[tuple[str, int], list[tuple[str, set[str]]]] = {}
+    for e in entries:
+        f = e.fields
+        authors, year = f.get("authors") or [], f.get("year")
+        tokens = _title_tokens(f.get("title"))
+        if not authors or not isinstance(year, int) or len(tokens) < 2:
+            continue
+        parts = authors[0].split()
+        surname = _alnum(parts[-1]) if parts else ""
+        if surname:
+            buckets.setdefault((surname, year), []).append((e.original_key, tokens))
+    out: list[str] = []
+    for _, items in sorted(buckets.items()):
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (k1, t1), (k2, t2) = items[i], items[j]
+                if len(t1 & t2) / min(len(t1), len(t2)) >= 0.8:
+                    out.append(f"{tag} stage=bib_unify: possible duplicate "
+                               f"(not merged): '{k1}' ~ '{k2}'")
+    return out
 
 
 def unify_bibliography(
@@ -849,6 +964,9 @@ def unify_bibliography(
         BibEntry(original_key=key, entry_type=etype, fields=fields)
         for key, (etype, fields) in zip(canon_keys, merged)
     ]
+    warnings.extend(_possible_duplicates(tag, entries))
     return BibliographyResult(
         arxiv_id=arxiv_id, entries=entries, key_mapping=mapping, warnings=warnings,
     )
+
+
