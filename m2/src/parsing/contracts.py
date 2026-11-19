@@ -1,3 +1,4 @@
+"""Shared internal contracts for M2 (provisional copy)."""
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,4 +40,19 @@ class ParsedDocument:
     version: int
     root: ParsedNode | None
     status: str
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BibEntry:
+    original_key: str
+    entry_type: str
+    fields: dict[str, object]
+
+
+@dataclass
+class BibliographyResult:
+    arxiv_id: str
+    entries: list[BibEntry]
+    key_mapping: dict[int, dict[str, str]]
     warnings: list[str] = field(default_factory=list)
