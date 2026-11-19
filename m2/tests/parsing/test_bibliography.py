@@ -438,3 +438,253 @@ def test_normalize_weird_values_never_raises():
     f = normalize_entry(e).fields
     assert f["title"] is None and f["authors"] == []
     assert f["year"] is None and f["doi"] is None and f["url"] is None
+
+
+def _doc_bib(text):
+    return GatheredDocument("x", 1, "main.tex", "", ["main.tex"], {"r.bib": text}, "ok")
+
+
+def test_string_defined_after_use():
+    entries, warns = parse_bib('@article{a, journal = jrn, title = {T}}\n@string{jrn = "Nature"}')
+    assert entries[0].fields["journal"] == "Nature" and warns == []
+
+
+def test_commented_entry_skipped_but_percent_in_value_kept():
+    entries, _ = parse_bib("% @article{old, title={Old}}\n@misc{u, url = {http://a/b%20c}}\n")
+    assert [e.original_key for e in entries] == ["u"]
+    assert entries[0].fields["url"] == "http://a/b%20c"
+
+
+CROSS = """
+@proceedings{proc, title = {Proc. of X}, year = 2019, publisher = {ACM}}
+@inproceedings{paper1, author = {Lee, Kim}, title = {Own Title}, crossref = {PROC}}
+@inproceedings{orphan, title = {Orphan}, crossref = {nope}}
+@misc{c1, title = {C1}, crossref = {c2}}
+@misc{c2, title = {C2}, crossref = {c1}}
+"""
+
+
+def test_crossref_inheritance_missing_parent_and_cycle():
+    entries = {e.original_key: e for e in extract_bibliography(_doc_bib(CROSS))}
+    p = entries["paper1"].fields
+    assert p["title"] == "Own Title"            # child's own title is kept
+    assert p["booktitle"] == "Proc. of X"       # parent's title -> booktitle
+    assert p["year"] == 2019 and p["publisher"] == "ACM"
+    assert "booktitle" not in entries["orphan"].fields
+    assert entries["c1"].fields["title"] == "C1"  # cycle: terminates, own title kept
+
+
+def test_extract_case_insensitive_duplicates_and_keyless_entries():
+    doc = _doc_bib("@misc{Smith2020, title={A}}\n@misc{smith2020, title={B}}\n"
+                   "@misc{, title={K1}}\n@misc{, title={K2}}")
+    entries = extract_bibliography(doc)
+    assert [e.original_key for e in entries] == ["Smith2020", "", ""]
+    assert entries[0].fields["title"] == "A"
+
+
+def test_build_key_resolver():
+    resolve = build_key_resolver({"smith2020": "canon", "A": "ca", "a": "cb"})
+    assert resolve("smith2020") == "canon"
+    assert resolve(" Smith2020 ") == "canon"
+    assert resolve("A") == "ca" and resolve("a") == "cb"   # exact match wins
+    assert resolve("unknown") is None
+    assert build_key_resolver({"Ab": "x", "aB": "y"})("AB") is None  # ambiguous
+
+
+def test_bibitem_nested_label_braces():
+    entries, warns = parse_bibitems(
+        "\\bibitem[{{\\em Smith} (2020)}]{k1} Smith, A title, 2020.\n"
+        "\\bibitem[{[1]}]{k2} Other, 2019.\n"
+        "\\bibitem{k3} Third, 2018.")
+    assert [e.original_key for e in entries] == ["k1", "k2", "k3"]
+    assert entries[0].fields["label"] == "{{\\em Smith} (2020)}"
+    assert "k2" not in entries[0].fields["raw"]
+    assert warns == []
+
+
+def test_bibitem_percent_in_url_kept_real_comment_removed():
+    entries, _ = parse_bibitems(
+        "\\bibitem{u} See \\url{http://example.com/file%20name}. % real comment\n"
+        "\\bibitem{v} Next, 2020.")
+    f = entries[0].fields
+    assert f["url"] == "http://example.com/file%20name"
+    assert "real comment" not in f["raw"] and "%20" in f["raw"]
+
+
+def test_bibitem_year_ignores_page_ranges():
+    def year(body):
+        return parse_bibitems("\\bibitem{k} " + body)[0][0].fields["year"]
+    assert year("Smith. Title. Journal, 2020, pp. 1980--1990.") == "2020"
+    assert year("Smith. Title. Journal, pages 1980-1990, 2021.") == "2021"
+    assert year("Smith. Title. Journal 5(2):1980--1990, 2022.") == "2022"
+
+
+def test_bibitem_conference_goes_to_booktitle_not_journal():
+    entries, _ = parse_bibitems(
+        "\\bibitem{c} J. Smith.\n\\newblock A Title.\n"
+        "\\newblock In \\emph{Proc. ICML}, 2020.\n"
+        "\\bibitem{p} J. Doe.\n\\newblock Another.\n"
+        "\\newblock \\emph{Proceedings of the National Academy of Sciences}, 5:1--10, 2020.")
+    c = normalize_entry(entries[0]).fields
+    assert c["booktitle"] == "Proc. ICML" and c["journal"] is None
+    p = normalize_entry(entries[1]).fields
+    assert p["journal"] == "Proceedings of the National Academy of Sciences"
+    assert "booktitle" not in p
+
+
+def test_vancouver_authors():
+    def authors(s):
+        e = BibEntry("k", "misc", {"raw": "x", "author": s})
+        return normalize_entry(e).fields["authors"]
+    assert authors("Smith J, Doe AB, Lee K.") == ["J. Smith", "A. B. Doe", "K. Lee"]
+    assert authors("Google AI") == ["Google AI"]
+
+
+def test_et_al_removed_and_flagged():
+    def norm(author, bibitem=False):
+        fields = {"author": author}
+        if bibitem:
+            fields["raw"] = "x"
+        return normalize_entry(BibEntry("k", "misc", fields)).fields
+    f = norm("Smith, J., et al.", bibitem=True)
+    assert f["authors"] == ["J. Smith"] and f["authors_truncated"] is True
+    assert norm("Smith et al.", bibitem=True)["authors"] == ["Smith"]
+    g = norm("Smith, John and others")
+    assert g["authors"] == ["John Smith"] and g["authors_truncated"] is True
+    assert "authors_truncated" not in norm("Smith, John")
+
+
+def test_unify_bibitem_raw_ignores_latex_markup():
+    v1, _ = parse_bibitems("\\bibitem{a} John Smith. Deep Learning, 2020.")
+    v2, _ = parse_bibitems("\\bibitem{b} John Smith.\n\\newblock Deep \\emph{Learning}, 2020.")
+    r = unify_bibliography("x", {1: v1, 2: v2})
+    assert len(r.entries) == 1
+    assert r.key_mapping == {1: {"a": "a"}, 2: {"b": "a"}}
+
+
+def test_unify_missing_year_needs_strong_evidence():
+    short = unify_bibliography("x", {1: [_e("a", "Introduction")],
+                                     2: [_e("b", "Introduction", year="")]})
+    assert len(short.entries) == 2          # generic short title: not merged
+    long_ = unify_bibliography("x", {1: [_e("a", "Attention Is All You Need")],
+                                     2: [_e("b", "Attention Is All You Need", year="")]})
+    assert len(long_.entries) == 1          # contract example: year dropped later
+    other = unify_bibliography("x", {
+        1: [_e("a", "Attention Is All You Need")],
+        2: [_e("b", "Attention Is All You Need", author="Jones, Ann", year="")]})
+    assert len(other.entries) == 2
+
+
+def test_possible_duplicates_reported_not_merged():
+    r = unify_bibliography("x", {1: [_e("a", "Deep Learning"),
+                                     _e("b", "Deep Learning A Survey")]})
+    assert len(r.entries) == 2
+    assert any("possible duplicate" in w and "'a'" in w and "'b'" in w
+               for w in r.warnings)
+    r2 = unify_bibliography("x", {1: [_e("a", "Deep Learning"),
+                                      _e("b", "Deep Learning A Survey", year="2021")]})
+    assert not any("possible duplicate" in w for w in r2.warnings)
+
+
+def test_journal_macros_expanded():
+    def j(v):
+        return normalize_entry(BibEntry("k", "article", {"journal": v})).fields["journal"]
+    assert j(r"\apj") == "The Astrophysical Journal"
+    assert j(r"{\mnras}") == "Monthly Notices of the Royal Astronomical Society"
+    assert j(r"\nat") == "Nature"
+    assert j(r"\unknownmacro") == r"\unknownmacro"
+
+
+def test_year_raw_kept_when_unparseable():
+    def fields(**kw):
+        return normalize_entry(BibEntry("k", "misc", kw)).fields
+    f = fields(year="to appear")
+    assert f["year"] is None and f["year_raw"] == "to appear"
+    assert fields(year="n.d.")["year_raw"] == "n.d."
+    assert "year_raw" not in fields(year="2020")
+    assert "year_raw" not in fields(title="x")
+
+
+def test_unify_year_raw_dropped_when_year_known():
+    r = unify_bibliography("x", {
+        1: [_e("a", "Some Long Title Here")],
+        2: [_e("a", "Some Long Title Here", year="to appear")]})
+    f = r.entries[0].fields
+    assert len(r.entries) == 1 and f["year"] == 2020 and "year_raw" not in f
+
+
+def test_doi_from_note_requires_prefix_and_is_weak():
+    def f(**kw):
+        return normalize_entry(BibEntry("k", "misc", kw)).fields
+    a = f(note="doi:10.1000/ABC.1")
+    assert a["doi"] == "10.1000/abc.1" and a["doi_source"] == "note"
+    assert f(note="Dataset at 10.1000/xyz")["doi"] is None       # no prefix
+    own = f(doi="10.1000/own", note="doi:10.1000/other")
+    assert own["doi"] == "10.1000/own" and "doi_source" not in own
+
+
+def test_note_doi_is_not_a_merge_key_and_never_beats_own_doi():
+    r = unify_bibliography("x", {1: [
+        _e("a", "First Distinct Paper Title", note="Data: doi:10.1000/ds"),
+        _e("b", "Second Unrelated Study Name", author="Jones, Ann", year="2021",
+           note="Data: doi:10.1000/ds"),
+    ]})
+    assert len(r.entries) == 2
+    r2 = unify_bibliography("x", {
+        1: [_e("a", "Some Long Title Here", doi="10.1000/own")],
+        2: [_e("a", "Some Long Title Here", note="doi:10.1000/other")]})
+    f = r2.entries[0].fields
+    assert len(r2.entries) == 1 and f["doi"] == "10.1000/own"
+    assert "doi_source" not in f
+
+
+def test_journal_macro_recorded_and_plain_abbreviation_untouched():
+    def norm(v):
+        return normalize_entry(BibEntry("k", "article", {"journal": v})).fields
+    a = norm(r"\apj")
+    assert a["journal"] == "The Astrophysical Journal" and a["journal_macro"] == "apj"
+    u = norm(r"\unknownmacro")
+    assert u["journal"] == r"\unknownmacro" and u["journal_macro"] == "unknownmacro"
+    assert norm("ApJ")["journal"] == "ApJ" and "journal_macro" not in norm("ApJ")
+    assert norm(r"\apjlett")["journal"] == "The Astrophysical Journal Letters"
+    assert norm(r"\psj")["journal"] == "The Planetary Science Journal"
+
+
+def test_bibitem_quoted_title_ieee_journal_and_conference():
+    entries, _ = parse_bibitems(
+        "\\bibitem{j} J. Smith and A. Doe, ``Deep learning for graphs,'' "
+        "\\emph{Nature}, vol. 5, no. 2, pp. 1--10, 2020.\n"
+        "\\bibitem{c} K. Lee, ``Attention revisited,'' in \\emph{Proc. ICML}, 2019.")
+    j = normalize_entry(entries[0]).fields
+    assert j["parse_mode"] == "quoted"
+    assert j["title"] == "Deep learning for graphs"
+    assert j["authors"] == ["J. Smith", "A. Doe"]
+    assert j["journal"] == "Nature" and j["year"] == 2020
+    c = normalize_entry(entries[1]).fields
+    assert c["title"] == "Attention revisited"
+    assert c["booktitle"] == "Proc. ICML" and c["journal"] is None
+    assert c["year"] == 2019
+
+
+def test_bibitem_straight_quotes_ignore_latex_accent_quote():
+    entries, _ = parse_bibitems(
+        '\\bibitem{s} M{\\"u}ller, A. "A study of X," Journal of Y, 2018.')
+    f = normalize_entry(entries[0]).fields
+    assert f["parse_mode"] == "quoted"
+    assert f["title"] == "A study of X"
+    assert f["authors"] == ["A. Müller"]
+    assert f["year"] == 2018 and f["journal"] is None
+
+
+def test_bibitem_without_quotes_stays_raw_only():
+    for body in ("Foo Bar, A manual entry, 2021.",
+                 "Hinton's book, 2020.",
+                 "``Only a title,'' 2020."):          # nothing before the quote
+        e = parse_bibitems("\\bibitem{n} " + body)[0][0]
+        assert e.fields["parse_mode"] == "raw_only"
+        assert "title" not in e.fields
+
+
+def test_bibitem_parse_mode_newblock():
+    e = parse_bibitems("\\bibitem{a} A. B.\n\\newblock A Title Here.\n\\newblock Journal, 2020.")[0][0]
+    assert e.fields["parse_mode"] == "newblock"
