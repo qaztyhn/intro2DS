@@ -1,4 +1,11 @@
-"""Shared internal contracts for M2 (provisional copy)."""
+"""Shared dataclasses transcribed from the team's M2 contract.
+
+Public fields/signatures are shared with TV2–TV4. Do not extend them without
+agreement and corresponding interface tests. No final element IDs are assigned
+by TV1 or the hierarchy parser.
+"""
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,7 +38,7 @@ class ParsedNode:
     local_id: str
     kind: str
     content: str
-    children: list["ParsedNode"] = field(default_factory=list)
+    children: list[ParsedNode] = field(default_factory=list)
 
 
 @dataclass

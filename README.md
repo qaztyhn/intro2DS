@@ -97,3 +97,14 @@ All three stages (`extract`, `references`, `storage`) are wired in `src/main.py`
 
 `run.json` records `started_at`, `finished_at`, `run_status` (`running`, `completed`, `interrupted`, `crashed`),
 `cache_mode` (`cold` for a new run, `warm` when resuming), `input_ids` and the environment.
+
+## Milestone 2 ? Integrated parser
+
+M2 modules live in `m2/src/parsing`; run commands from the repository root.
+See [M2 integration and execution](m2/docs/INTEGRATION.md) for setup, CLI arguments,
+output schemas, QA, tests and current limitations. No crawling or S2 requests occur in M2.
+
+```powershell
+python -B -m pytest m2/tests -q -p no:cacheprovider
+python -B -m m2.src.parsing.cli --help
+```
