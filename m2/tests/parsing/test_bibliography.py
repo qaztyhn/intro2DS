@@ -629,3 +629,15 @@ def test_note_doi_is_not_a_merge_key_and_never_beats_own_doi():
     f = r2.entries[0].fields
     assert len(r2.entries) == 1 and f["doi"] == "10.1000/own"
     assert "doi_source" not in f
+
+
+def test_journal_macro_recorded_and_plain_abbreviation_untouched():
+    def norm(v):
+        return normalize_entry(BibEntry("k", "article", {"journal": v})).fields
+    a = norm(r"\apj")
+    assert a["journal"] == "The Astrophysical Journal" and a["journal_macro"] == "apj"
+    u = norm(r"\unknownmacro")
+    assert u["journal"] == r"\unknownmacro" and u["journal_macro"] == "unknownmacro"
+    assert norm("ApJ")["journal"] == "ApJ" and "journal_macro" not in norm("ApJ")
+    assert norm(r"\apjlett")["journal"] == "The Astrophysical Journal Letters"
+    assert norm(r"\psj")["journal"] == "The Planetary Science Journal"

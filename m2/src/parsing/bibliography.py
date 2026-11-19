@@ -642,6 +642,15 @@ _JOURNAL_MACROS = {
     "nphysa": "Nuclear Physics A", "physrep": "Physics Reports",
     "physscr": "Physica Scripta", "planss": "Planetary and Space Science",
     "procspie": "Proceedings of the SPIE",
+    "aas": "American Astronomical Society Meeting Abstracts",
+    "psj": "The Planetary Science Journal",
+    "maps": "Meteoritics and Planetary Science",
+    "jaavso": "Journal of the American Association of Variable Star Observers",
+    # aliases of macros above
+    "apjlett": "The Astrophysical Journal Letters",
+    "apjsupp": "The Astrophysical Journal Supplement Series",
+    "astap": "Astronomy and Astrophysics",
+    "applopt": "Applied Optics",
 }
 _JOURNAL_MACRO = re.compile(r"^\\([A-Za-z]+)\.?$")
 _NOTE_DOI = re.compile(
@@ -685,7 +694,11 @@ def normalize_entry(entry: BibEntry) -> BibEntry:
     if from_bibitem:
         m = _EMPH.search(jr)
         jr = m.group(1) if m else jr
-    journal = _expand_journal(clean_text(jr)) or None
+    journal_text = clean_text(jr)
+    journal = _expand_journal(journal_text) or None
+    macro = _JOURNAL_MACRO.match(journal_text.strip())
+    if macro:
+        f["journal_macro"] = macro.group(1).lower()  # expanded or unknown
 
     year = _year(f)
     if year is None:
