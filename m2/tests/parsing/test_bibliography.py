@@ -121,6 +121,13 @@ def test_bibitem_empty_key_warns():
     assert entries == [] and len(warns) == 1
 
 
+def test_bibitem_empty_url_is_ignored():
+    entries, warns = parse_bibitems(r"\bibitem{x} Author. \url{}")
+    assert len(entries) == 1
+    assert "url" not in entries[0].fields
+    assert warns == []
+
+
 def test_extract_merges_bib_and_bibitem_dedup_by_key():
     doc = GatheredDocument(
         arxiv_id="2507.11662", version=1, root_file="main.tex",
