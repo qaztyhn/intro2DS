@@ -32,7 +32,7 @@ Trong cùng một version, key trùng thì giữ bản đầu và ghi log warnin
 
 ## 3. Quy tắc dedup xuyên version (`unify_bibliography`)
 
-Chỉ so khớp chính xác, không fuzzy. Hai entry là một nếu (theo thứ tự ưu tiên):
+Chỉ so khớp chính xác. Đây là lựa chọn thiết kế thận trọng của TV3, không phải yêu cầu của đề bài (ràng buộc "full-text matching, không fuzzy" của đề áp dụng cho dedup elements, không phải bibliography). Hai entry là một nếu (theo thứ tự ưu tiên):
 1. cùng `doi`;
 2. cùng `eprint` (arXiv id, bỏ hậu tố `vN`);
 3. cùng title sau chuẩn hóa (bỏ dấu, chữ thường, chỉ giữ chữ và số), và năm không mâu thuẫn, và họ tác giả đầu không mâu thuẫn;
@@ -110,7 +110,7 @@ Chỉ commit `profiling_summary.json` và `profiling_report.md`. Không commit c
 - Entry từ `\bibitem` không có `\newblock` chỉ tách được các field nhận diện bằng regex (`doi`, `url`, `eprint`, `year`); `title` và `authors` rỗng, thông tin còn lại nằm trong `raw`.
 - Với `\bibitem` có `\newblock`, `journal` lấy nội dung `\emph{}` nếu có; nếu không thì lấy cả khối thứ 3, có thể lẫn volume/trang.
 - Tên tác giả giả định dạng `Last, First` hoặc `First Last`; tên tổ chức viết trong `{...}` được giữ nguyên.
-- Dedup chỉ so khớp chính xác (theo yêu cầu đề bài), nên các entry giống nhau nhưng khác cách viết title sẽ không được gộp.
+- Dedup chỉ so khớp chính xác (lựa chọn thiết kế, xem mục 9), nên các entry giống nhau nhưng khác cách viết title sẽ không được gộp.
 - Profiling dùng regex trên `.tex`, chỉ mang tính sơ bộ, không thay thế kết quả parser.
 
 ## 8. Chạy test
@@ -118,3 +118,16 @@ Chỉ commit `profiling_summary.json` và `profiling_report.md`. Không commit c
 ```bash
 cd m2 && python -m pytest tests/parsing -q
 ```
+
+cat >> m2/docs/handoff_tv3.md << 'EOF'
+
+## 9. Quyết định thiết kế
+
+1. **Hội nghị vào `booktitle`.** Với entry `\bibitem`, khối thứ 3 bắt đầu bằng `In` hoặc chứa `conference`/`workshop`/`symposium`/... được lưu vào `booktitle`. `journal` để `None` nếu không có tên tạp chí. Đây là giới hạn của schema (bảng `bibtex` không có cột `booktitle`), không phải lỗi parser. `booktitle` vẫn nằm trong `BibEntry.fields` nhưng không được đưa vào bảng.
+2. **Tên tác giả kiểu Vancouver** (`Smith J, Doe AB`) chỉ được chuyển thành `J. Smith`, `A. B. Doe` khi có ít nhất hai tác giả và tất cả đều khớp mẫu. Trường hợp không đủ điều kiện giữ nguyên để tránh chuẩn hóa sai (ví dụ tên tổ chức `Google AI`).
+3. **Dedup chỉ so khớp chính xác** là lựa chọn thận trọng của TV3. Đánh đổi: không gộp nhầm, nhưng bỏ sót các entry đổi cách viết title.
+4. **Key BibTeX không phân biệt hoa/thường.** `extract_bibliography` coi `Smith2020` và `smith2020` trong cùng version là trùng (giữ entry đầu, ghi warning). Entry không có key không bao giờ bị coi là trùng. TV2 nên tra `key_mapping` bằng `build_key_resolver(mapping)` (khớp chính xác trước, rồi không phân biệt hoa/thường, trả `None` nếu mơ hồ).
+5. **`crossref`** được xử lý trong `extract_bibliography`: field thiếu của entry con được lấy từ entry cha; `title` của cha không bao giờ thay `title` của con, mà thành `booktitle` cho `inproceedings`/`incollection`/`inbook`/`conference`.
+6. **`@string`** được thu thập ở lượt đầu nên có thể định nghĩa sau khi dùng. Entry `@...` nằm trên dòng bắt đầu bằng `%` bị bỏ qua (theo cách của biber); `%` trong giá trị field và trong `\url{}`/`\href{}` được giữ nguyên.
+7. **`et al.` và `others`** bị loại khỏi `authors`; field `authors_truncated = True` ghi nhận danh sách bị rút gọn.
+EOF
