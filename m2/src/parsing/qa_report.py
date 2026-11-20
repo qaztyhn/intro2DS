@@ -95,6 +95,8 @@ def status_row(gathered: Any, parsed: Any = None, *, has_tex: bool | None = None
         row["status"] = parsed_status if parsed_status in STATUSES else gathered.status
         if row["status"] == "failed":
             row.update(stage="parse", reason="parser returned failed")
+        elif row["status"] == "partial" and codes:
+            row.update(stage="gather", reason=codes[-1])
         row["include_problems"] = sum(c in INCLUDE_PROBLEM_CODES for c in codes)
         if row["has_tex"] is None:
             row["has_tex"] = True

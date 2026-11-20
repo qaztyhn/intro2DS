@@ -330,6 +330,7 @@ def test_status_row_counts_only_include_problem_codes():
     out = qa_report.status_row(gathered("partial", warnings=warnings),
                                SimpleNamespace(status="partial"))
     assert out["status"] == "partial" and out["include_problems"] == 2
+    assert (out["stage"], out["reason"]) == ("gather", "UNRESOLVED_CONDITIONAL")
 
 
 def test_status_row_takes_the_parser_status_when_it_is_worse():

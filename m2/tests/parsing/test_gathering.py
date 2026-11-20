@@ -55,6 +55,23 @@ def test_root_name_is_not_hardcoded(tmp_path, root):
     assert result.status == 'ok' and result.root_file == root
 
 
+@pytest.mark.parametrize('declaration', [r'\documentstyle{amsppt}',
+                                          r'\documentstyle[12pt]{article}'])
+def test_legacy_documentstyle_is_a_root(tmp_path, declaration):
+    result = module.gather_source(source(tmp_path, {'paper.tex': declaration + ' BODY'}))
+    assert result.status == 'ok'
+    assert result.root_file == 'paper.tex'
+
+
+def test_bare_input_stops_before_following_documentstyle(tmp_path):
+    result = module.gather_source(source(tmp_path, {
+        'paper.tex': r'\input amstex\documentstyle{amsppt} BODY',
+    }))
+    assert result.status == 'partial'
+    assert result.root_file == 'paper.tex'
+    assert any('MISSING_DEPENDENCY' in warning for warning in result.warnings)
+
+
 def test_repeated_include_expands_twice_but_inventory_is_unique(tmp_path):
     result = module.gather_source(source(tmp_path, {
         'r.tex': '\\documentclass{article}A\\input{part}B\\input{part}C', 'part.tex': 'X'}))
@@ -87,6 +104,49 @@ def test_root_failures_are_explicit(tmp_path, files, code):
     result = module.gather_source(source(tmp_path, files))
     assert result.status == 'failed' and not result.latex
     assert any(code in w for w in result.warnings)
+
+
+def test_included_standalone_root_is_not_an_independent_document(tmp_path):
+    result = module.gather_source(source(tmp_path, {
+        'main.tex': r'\documentclass{article}\input{figure}\begin{document}MAIN\end{document}',
+        'figure.tex': r'\documentclass{standalone}\begin{document}FIGURE\end{document}',
+    }))
+    assert result.status == 'partial'
+    assert result.root_file == 'main.tex'
+    assert result.included_files == ['main.tex', 'figure.tex']
+    assert 'MAIN' in result.latex and 'FIGURE' in result.latex
+    assert any('ROOT_SELECTED_BY_DEPENDENCY_GRAPH' in w for w in result.warnings)
+
+
+def test_independent_roots_remain_ambiguous(tmp_path):
+    result = module.gather_source(source(tmp_path, {
+        'article.tex': r'\documentclass{article}\begin{document}ARTICLE\end{document}',
+        'supplement.tex': r'\documentclass{article}\begin{document}SUPPLEMENT\end{document}',
+    }))
+    assert result.status == 'failed'
+    assert any('AMBIGUOUS_ROOT' in w for w in result.warnings)
+
+
+def test_end_document_stops_root_scan_and_discards_trailing_template(tmp_path):
+    result = module.gather_source(source(tmp_path, {
+        'article.tex': (r'\documentclass{article}\begin{document}ARTICLE\end{document}'
+                        r'\documentclass{book}\begin{document}TEMPLATE\end{document}'),
+    }))
+    assert result.status == 'ok'
+    assert result.root_file == 'article.tex'
+    assert 'ARTICLE' in result.latex and 'TEMPLATE' not in result.latex
+
+
+@pytest.mark.parametrize('environment', ['vquote', 'filecontents', 'filecontents*'])
+def test_documentclass_inside_code_sample_is_not_a_root(tmp_path, environment):
+    result = module.gather_source(source(tmp_path, {
+        'article.tex': (r'\documentclass{article}'
+                        + f'\\begin{{{environment}}}\\documentclass{{book}}'
+                        + f'\\end{{{environment}}}'
+                        + r'\begin{document}ARTICLE\end{document}'),
+    }))
+    assert result.status == 'ok'
+    assert result.root_file == 'article.tex'
 
 
 def test_relative_parent_include_inside_source_and_ambiguity(tmp_path):
