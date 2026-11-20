@@ -326,11 +326,57 @@ def test_rewriting_a_part_replaces_it(tmp_path):
                                              "hierarchy_internal"]
 
 
+@pytest.mark.parametrize('rewrite', [False, True])
+@pytest.mark.parametrize('failed_call', [2, 4])
+def test_part_publish_failure_rolls_back_all_tables(tmp_path, monkeypatch, rewrite, failed_call):
+    parts = tmp_path / 'parts'
+    e, h, b = publication()
+    if rewrite:
+        export.write_part(fx.ID, e, h, b[:1], parts)
+    before = {p.relative_to(parts): p.read_bytes() for p in parts.rglob('*.parquet')}
+    replace = export.os.replace
+    calls = 0
+
+    def fail_once(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == failed_call:
+            raise PermissionError('injected publish failure')
+        return replace(source, target)
+
+    monkeypatch.setattr(export.os, 'replace', fail_once)
+    with pytest.raises(PermissionError, match='injected'):
+        export.write_part(fx.ID, e, h, b, parts)
+    assert {p.relative_to(parts): p.read_bytes() for p in parts.rglob('*.parquet')} == before
+    export.merge_parts(parts, tmp_path / 'merged')
+    assert read(tmp_path / 'merged', 'bibtex').num_rows == (1 if rewrite else 0)
+
+
 def test_write_part_rejects_rows_of_another_publication(tmp_path):
     e, h, b = publication()
     with pytest.raises(ValueError, match="other publications"):
         export.write_part(fx.OTHER_ID, e, h, b, tmp_path / "parts")
     assert not (tmp_path / "parts" / "elements").exists()
+
+
+def test_failed_rollback_retains_previous_part_for_recovery(tmp_path, monkeypatch):
+    parts = tmp_path / 'parts'
+    e, h, b = publication()
+    export.write_part(fx.ID, e, h, b[:1], parts)
+    replace = export.os.replace
+    calls = 0
+
+    def fail_publish_and_restore(source, target):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise PermissionError('persistent lock')
+        return replace(source, target)
+
+    monkeypatch.setattr(export.os, 'replace', fail_publish_and_restore)
+    with pytest.raises(export.PartRollbackError, match='recovery files retained'):
+        export.write_part(fx.ID, e, h, b, parts)
+    assert list(parts.glob('.export-*/*.previous'))
 
 
 def test_merge_rejects_a_part_with_a_mismatched_file_name(tmp_path):

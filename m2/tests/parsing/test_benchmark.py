@@ -60,6 +60,19 @@ def run(tmp_path, label="trial", **kwargs):
                                    label, **kwargs)
 
 
+def test_rollback_failure_aborts_before_merge(tmp_path, monkeypatch):
+    def broken_write(*args, **kwargs):
+        raise benchmark.export.PartRollbackError('inconsistent parts')
+
+    def forbidden_merge(*args):
+        pytest.fail('must not merge after failed rollback')
+
+    monkeypatch.setattr(benchmark.export, 'write_part', broken_write)
+    monkeypatch.setattr(benchmark.export, 'merge_parts', forbidden_merge)
+    with pytest.raises(benchmark.export.PartRollbackError):
+        run(tmp_path, process=lambda *args: ([], [], []))
+
+
 # ------------------------------------------------------- stage measuring ----
 
 def test_stage_accumulates_time_calls_and_peak():
