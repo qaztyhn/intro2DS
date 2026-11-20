@@ -16,10 +16,11 @@ MAX_FILE_BYTES = 64 * 2**20
 MAX_TOTAL_BYTES = 512 * 2**20
 MAX_OUTPUT_CHARS = 128 * 2**20
 MAX_DEPTH = 128
-LITERALS = {'verbatim', 'verbatim*', 'Verbatim', 'lstlisting', 'minted', 'comment'}
+LITERALS = {'verbatim', 'verbatim*', 'Verbatim', 'lstlisting', 'minted', 'comment',
+            'vquote', 'filecontents', 'filecontents*'}
 DEFINITIONS = {'newcommand', 'renewcommand', 'providecommand', 'DeclareRobustCommand',
                'DeclareMathOperator', 'def', 'gdef', 'edef', 'xdef', 'newenvironment', 'renewenvironment'}
-DIRECTIVES = re.compile(r'\\(?:input|include|import|subimport|bibliography|addbibresource|documentclass)(?![A-Za-z@])')
+DIRECTIVES = re.compile(r'\\(?:input|include|import|subimport|bibliography|addbibresource|documentclass|documentstyle)(?![A-Za-z@])')
 COMMAND = re.compile(r'\\([A-Za-z@]+|[^\n])')
 SPECIAL = re.compile(r'[\\%]')
 CONDITIONAL_MACROS = {'ifthenelse': 3, 'ifdef': 3, 'ifboolexpr': 3,
@@ -236,7 +237,7 @@ def events(text, non_conditionals=None, conditional_flags=None):
                     if token < len(text) and text[token] == '\\': _, index = command(text, token)
             yield start, index, 'conditional', None
             continue
-        if name == 'documentclass':
+        if name in ('documentclass', 'documentstyle'):
             yield start, end, 'root', None
         elif name in ('input', 'include', 'bibliography', 'addbibresource', 'includeonly', 'subfile', 'subfileinclude'):
             after = end
@@ -249,7 +250,7 @@ def events(text, non_conditionals=None, conditional_flags=None):
                 yield start, index, name, value[0]
             elif name == 'input':
                 after = spaces(text, after)
-                match = re.match(r'[^\s{}]+', text[after:])
+                match = re.match(r'[^\s{}\\]+', text[after:])
                 if match:
                     index = after + len(match[0])
                     yield start, index, name, match[0]
@@ -267,6 +268,13 @@ def events(text, non_conditionals=None, conditional_flags=None):
             # TeX stops at the end of the current input line.
             index = len(text)
             yield start, index, 'endinput', text[end:line] if line >= 0 else text[end:]
+        elif name == 'end':
+            value = group(text, end)
+            if value and value[0].strip() == 'document':
+                # TeX terminates the job here. Submitted sources sometimes
+                # append another template/example document after this point.
+                index = len(text)
+                yield start, index, 'enddocument', text[start:value[1]]
 
 
 def root_count(text, depth=0):
@@ -277,6 +285,44 @@ def root_count(text, depth=0):
         elif kind == 'conditional' and payload is not None:
             count += root_count(payload, depth + 1)
     return count
+
+
+def _declared_tex_dependency(context, origin, raw):
+    """Resolve one static TeX dependency without guessing or warnings."""
+    raw = raw.strip()
+    if not raw or any(c in raw for c in '\\#$\x00{}'):
+        return None
+    if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive or ':' in raw:
+        return None
+    candidates = set()
+    for base in (posixpath.dirname(origin), ''):
+        path = posixpath.normpath(posixpath.join(base, raw))
+        if path == '..' or path.startswith('../'):
+            continue
+        if not PurePosixPath(path).suffix:
+            path += '.tex'
+        if path in context.names:
+            candidates.add(path)
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _top_level_roots(context, roots):
+    """Remove root candidates explicitly included by another root.
+
+    Only a unique dependency-graph root is selected automatically. Independent
+    documents remain ambiguous and require a reviewed root choice.
+    """
+    root_set = set(roots)
+    referenced = set()
+    for origin in roots:
+        for _, _, kind, payload in events(context.clean(origin)):
+            if kind not in ('input', 'include') or payload is None:
+                continue
+            target = _declared_tex_dependency(context, origin, payload)
+            if target in root_set and target != origin:
+                referenced.add(target)
+    top_level = [name for name in roots if name not in referenced]
+    return top_level if len(top_level) == 1 else roots
 
 
 class Context:
@@ -385,6 +431,8 @@ class Context:
             elif kind == 'endinput':
                 replacement = payload
                 if payload.strip(): self.warn('ENDINPUT_TRAILING_TOKENS', origin, 'same-line tokens left unexpanded')
+            elif kind == 'enddocument':
+                replacement = payload
             elif kind == 'unsupported':
                 self.warn(payload, origin)
             elif kind in ('subfile', 'subfileinclude'):
@@ -458,6 +506,7 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
                 except (OSError, UnicodeError, ValueError) as exc:
                     if isinstance(exc, GatheringError): raise
                     raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
+        original_roots = roots
         if selected_root is not None:
             # The choice must still be an active, manifest-listed root. Never
             # read an arbitrary path or silently accept a stale configuration.
@@ -467,10 +516,16 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
             context.root = selected
             context.warn('ROOT_SELECTED_BY_CONFIG', selected,
                          'candidates=' + ', '.join(roots))
-        elif len(roots) != 1:
-            raise GatheringError('AMBIGUOUS_ROOT' if roots else 'NO_ROOT', ', '.join(roots))
         else:
+            if len(roots) > 1:
+                roots = _top_level_roots(context, roots)
+        if selected_root is None and len(roots) != 1:
+            raise GatheringError('AMBIGUOUS_ROOT' if roots else 'NO_ROOT', ', '.join(roots))
+        elif selected_root is None:
             context.root = roots[0]
+            if len(original_roots) > 1:
+                context.warn('ROOT_SELECTED_BY_DEPENDENCY_GRAPH', context.root,
+                             'candidates=' + ', '.join(original_roots))
         result.root_file = context.root
         result.latex = context.expand(context.root) or ''
         result.included_files, result.bib_files = context.included, context.bibs
