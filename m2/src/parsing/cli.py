@@ -61,6 +61,9 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
             stages[stage] = stages.get(stage, 0) + seconds
         audit.append({'arxiv_id': identity, 'version_status': result.version_status,
                       'warnings': result.warnings})
+        if result.version_status and all(
+                row['status'] in {'failed', 'skipped'} for row in result.version_status):
+            raise RuntimeError(f'{identity}: all recorded versions failed or were skipped')
         return result.elements, result.hierarchy, result.bibtex
 
     benchmark = run_benchmark(run_dir, ids_file, output_dir, label, process=process,
@@ -70,7 +73,8 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
     qa = build_qa_report(tables, statuses, output_dir / f'benchmark_{label}.json',
                          bib_entries_before=bib_before, scope=f'ID list: {Path(ids_file).name}')
     report = {'publications': audit, 'stage_seconds_sum': stages,
-              'note': 'Per-stage sums exclude failed publication attempts; benchmark wall time includes them.'}
+              'note': 'Per-stage sums include calls returning a detailed result, even when versions failed. '
+                      'Publication attempts raising before that result are excluded; benchmark wall time includes them.'}
     (output_dir / label / 'processing_report.json').write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return benchmark, qa
@@ -88,8 +92,12 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO)
     benchmark, qa = run(args.run_dir, args.ids_file, args.output_dir, args.label,
                         root_choices_path=args.root_choices)
-    print(json.dumps({'counts': benchmark['counts'], 'validation': qa['validation']['passed']}))
-    return 0 if qa['validation']['passed'] and not benchmark['counts']['publications_failed'] else 1
+    versions = qa['versions']['counts']['by_status']
+    print(json.dumps({'counts': benchmark['counts'], 'versions': versions,
+                      'validation': qa['validation']['passed']}))
+    return 0 if (qa['validation']['passed']
+                 and not benchmark['counts']['publications_failed']
+                 and not versions['failed'] and not versions['skipped']) else 1
 
 
 if __name__ == '__main__':

@@ -389,6 +389,8 @@ def run_benchmark(run_dir: Path, id_list_path: Path, output_dir: Path, label: st
                         elements, hierarchy, bibtex = _as_rows(arxiv_id, result)
                         export.write_part(arxiv_id, elements, hierarchy, bibtex, parts)
                 except Exception as error:  # one publication must not stop the batch
+                    if isinstance(error, export.PartRollbackError):
+                        raise  # merging inconsistent parts would corrupt the run
                     failures.append({"arxiv_id": arxiv_id, "stage": stage,
                                      "error_type": type(error).__name__,
                                      "message": str(error)[:300]})

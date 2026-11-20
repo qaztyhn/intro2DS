@@ -161,8 +161,8 @@ def _recover_fields(text, start, strings, key, close_ch):
     return fields, warnings, end
 
 
-def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
-    """Parse BibTeX text into raw entries. Returns (entries, warnings)."""
+def _scan(text: str, strings: dict[str, str], warnings: list[str]) -> list[BibEntry]:
+    """Scan entries while collecting string definitions and recovery diagnostics."""
     entries: list[BibEntry] = []
     pos = 0
     while True:
@@ -203,7 +203,15 @@ def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
                     entries.append(BibEntry(key, kind, recovered))
                     warnings.extend(details)
                     pos = resume
-    return entries, warnings
+    return entries
+
+
+def parse_bib(text: str) -> tuple[list[BibEntry], list[str]]:
+    """Collect string definitions before parsing entries, including forward uses."""
+    strings = dict(_MONTHS)
+    _scan(text, strings, [])
+    warnings: list[str] = []
+    return _scan(text, dict(strings), warnings), warnings
 
 
 _BOOKTITLE_TYPES = {"inproceedings", "incollection", "inbook", "conference"}
@@ -465,6 +473,10 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
             if fold:
                 seen.add(fold)
             entries.append(e)
+    entries, crossref_warnings = resolve_crossrefs(entries)
+    for warning in crossref_warnings:
+        log.warning('%s stage=bib_parse: %s', tag, warning)
+        diagnostics.append(f'{tag} stage=bib_parse: {warning}')
     return [normalize_entry(e) for e in entries], diagnostics
 
 

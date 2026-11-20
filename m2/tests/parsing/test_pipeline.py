@@ -7,10 +7,53 @@ from m1.src.downloader.http import make_manifest
 
 from m2.src.parsing import pipeline
 from m2.src.parsing.cli import run
+from m2.src.parsing.cli import main
 from m2.src.parsing.export import export_tables
 from m2.src.parsing.validation import validate_tables
 
 ID = '2507.01659'
+
+
+def test_cli_all_failed_versions_are_not_success(tmp_path):
+    directory = tmp_path / 'input'
+    paper = directory / 'papers' / ID.replace('.', '-')
+    paper.mkdir(parents=True)
+    (paper / 'metadata.json').write_text(json.dumps({'arxiv_id': ID, 'versions': [1]}))
+    ids = tmp_path / 'ids.txt'
+    ids.write_text(ID + '\n')
+    output = tmp_path / 'output'
+    code = main(['--run-dir', str(directory), '--ids-file', str(ids),
+                 '--output-dir', str(output), '--label', 'failed'])
+    assert code == 1
+    benchmark = json.loads((output / 'benchmark_failed.json').read_text())
+    assert benchmark['counts']['publications_ok'] == 0
+    assert benchmark['counts']['publications_failed'] == 1
+    report = json.loads((output / 'failed/processing_report.json').read_text())
+    assert report['publications'][0]['version_status'][0]['status'] == 'failed'
+
+
+def test_cli_mixed_failed_versions_returns_failure_but_keeps_output(multiversion, tmp_path):
+    ids = tmp_path / 'ids.txt'
+    ids.write_text(ID + '\n')
+    output = tmp_path / 'output'
+    assert main(['--run-dir', str(multiversion), '--ids-file', str(ids),
+                 '--output-dir', str(output), '--label', 'mixed']) == 1
+    assert pq.read_table(output / 'mixed/tables/bibtex.parquet').num_rows == 1
+
+
+def test_cli_no_tex_is_not_a_processing_failure(tmp_path):
+    directory = tmp_path / 'input'
+    version = directory / 'papers' / ID.replace('.', '-') / 'versions/v1'
+    version.mkdir(parents=True)
+    (version.parent.parent / 'metadata.json').write_text(json.dumps({'arxiv_id': ID, 'versions': [1]}))
+    manifest = make_manifest(ID, 1)
+    manifest.update(download_status='ok', extract_status='empty', source_format='pdf',
+                    source_files=[], error_code='NO_TEX_SOURCE')
+    (version / 'manifest.json').write_text(json.dumps(manifest))
+    ids = tmp_path / 'ids.txt'
+    ids.write_text(ID + '\n')
+    assert main(['--run-dir', str(directory), '--ids-file', str(ids),
+                 '--output-dir', str(tmp_path / 'output'), '--label', 'empty']) == 0
 
 
 @pytest.fixture

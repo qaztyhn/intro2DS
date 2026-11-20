@@ -11,9 +11,9 @@ Files written to ``output_dir``:
   ``bibtex.parquet``;
 * ``hierarchy_internal.parquet``: hierarchy plus ``position`` (D6), internal only.
 
-Writes are staged in a private sub-directory and moved into place only after
-every file was written, so an error never leaves a half-written or overwritten
-export behind. For large corpora write one part per publication with
+Writes are staged in a private sub-directory before publication. Each rename is
+atomic, but the table set is not crash-atomic. Publication parts additionally
+roll back handled replacement errors. For large corpora write one part with
 :func:`write_part` and combine them with :func:`merge_parts`; only one part is
 held in memory at a time.
 """
@@ -30,6 +30,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from m1.src.utils.common import paper_key
+
+
+class PartRollbackError(RuntimeError):
+    """Part files may be inconsistent; abort merging and retain recovery files."""
+
 
 _DICT = pa.dictionary(pa.int32(), pa.string())
 
@@ -245,7 +250,7 @@ def write_part(arxiv_id: str, elements: list[dict[str, Any]], hierarchy: list[di
     """Write one publication's rows under ``parts_dir/<table>/<paper_key>.parquet``.
 
     Every row must belong to ``arxiv_id`` (parts are merged by publication).
-    Rewriting a publication replaces its previous part atomically.
+    Failed replacements restore previous parts. This is not crash-atomic across files.
     """
     for table, rows in (("elements", elements), ("hierarchy", hierarchy), ("bibtex", bibtex)):
         wrong = {r.get("arxiv_id") for r in rows} - {arxiv_id}
@@ -254,17 +259,44 @@ def write_part(arxiv_id: str, elements: list[dict[str, Any]], hierarchy: list[di
                              f"{sorted(map(str, wrong))}")
     tables = build_tables(elements, hierarchy, bibtex)
     parts_dir = Path(parts_dir)
-    stage = _stage(parts_dir)  # private directory, removed whatever happens
+    stage = _stage(parts_dir)
+    retain_stage = False
     try:
         for name, table in tables.items():
             pq.write_table(table, stage / TABLE_FILES[name], row_group_size=ROW_GROUP_SIZE,
                            **_WRITE_OPTIONS)
-        for name in tables:
-            target = part_path(parts_dir, name, arxiv_id)
+        # Keep previous parts until every replacement succeeds. A failed
+        # publication must not leave a mixture that merge_parts can consume.
+        targets = {name: part_path(parts_dir, name, arxiv_id) for name in tables}
+        backups = {}
+        for name, target in targets.items():
             target.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(stage / TABLE_FILES[name], target)
+            if target.exists():
+                backup = stage / (TABLE_FILES[name] + '.previous')
+                shutil.copy2(target, backup)
+                backups[name] = backup
+        published = []
+        try:
+            for name, target in targets.items():
+                os.replace(stage / TABLE_FILES[name], target)
+                published.append(name)
+        except OSError:
+            rollback_errors = []
+            for name in reversed(published):
+                try:
+                    if name in backups:
+                        os.replace(backups[name], targets[name])
+                    else:
+                        targets[name].unlink()
+                except OSError as error:
+                    rollback_errors.append(error)
+            if rollback_errors:
+                retain_stage = True
+                raise PartRollbackError(f'Part rollback failed; recovery files retained at {stage}') from rollback_errors[0]
+            raise
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if not retain_stage:
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 def _scan_part(path: Path, table: str) -> str | None:
