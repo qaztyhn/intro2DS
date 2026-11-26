@@ -1,0 +1,6 @@
+pyarrow
+pyyaml
+pytest
+datasets
+huggingface_hub
+python-pptx

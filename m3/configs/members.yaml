@@ -1,0 +1,12 @@
+seed: 2026
+
+paths:
+  m2_dir: ../m3_data/m2            # chứa elements, hierarchy, bibtex (file .parquet hoặc thư mục shard)
+  work_dir: ../m3_data/work     # chứa assignments, papers, references, splits, labels, predictions
+  output_dir: ../m3_data/runs   # mỗi lần chạy ghi vào <output_dir>/<run_id>/
+
+members:
+  - "24120027"
+  - "24120046"
+  - "24120058"
+  - "24120085"
