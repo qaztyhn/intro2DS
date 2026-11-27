@@ -12,6 +12,7 @@ import unicodedata
 from typing import NamedTuple
 from collections.abc import Callable
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
+from .biblatex_bbl import parse_biblatex_bbl
 
 log = logging.getLogger(__name__)
 
@@ -453,8 +454,12 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
     for path in [p for p in paths if not p.lower().endswith(".bbl")]:
         sources.append((path, *parse_bib(document.bib_files[path])))
     for path in [p for p in paths if p.lower().endswith(".bbl")]:
-        parsed, warns = parse_bibitems(document.bib_files[path])
-        if not parsed and document.bib_files[path].strip() and not warns:
+        raw = document.bib_files[path]
+        if re.search(r"\\entry(?![A-Za-z@])", raw):
+            parsed, warns = parse_biblatex_bbl(raw)
+        else:
+            parsed, warns = parse_bibitems(raw)
+        if not parsed and raw.strip() and not warns:
             warns.append("BBL_NO_BIBITEM: unsupported or empty bibliography format")
         sources.append((path, parsed, warns))
     sources.append(("<latex>", *parse_bibitems(document.latex)))
