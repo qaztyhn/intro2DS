@@ -711,4 +711,64 @@ def test_bbl_with_no_bibitem_is_reported():
                            {"main.bbl": r"\refsection{0}\entry{x}{article}{}"}, "ok")
     entries, warnings = extract_bibliography_detailed(doc)
     assert entries == []
-    assert any("BBL_NO_BIBITEM" in message for message in warnings)
+    assert any("BBL_TRUNCATED_ENTRY" in message for message in warnings)
+
+
+def test_biber_bbl_structured_fields_and_names_normalize():
+    from m2.src.parsing.biblatex_bbl import parse_biblatex_bbl
+
+    bbl = (r"\refsection{0}" "\n"
+           r"\datalist[entry]{nyt/global//global/global}" "\n"
+           r"\entry{smith2020}{article}{}" "\n"
+           r"\name{author}{2}{}{{{hash=abc}{family={Smith},given={John}}}"
+           r"{{hash=def}{family={Doe},given={Jane}}}}" "\n"
+           r"\field{title}{A {Novel} Study}" "\n"
+           r"\field{year}{2020}" "\n"
+           r"\field{journaltitle}{Nature}" "\n"
+           r"\verb{doi}\verb 10.1000/abc \endverb" "\n"
+           r"\verb{url}\verb https://example.org/abc%20def \endverb" "\n"
+           r"\endentry" "\n"
+           r"\enddatalist" "\n"
+           r"\endrefsection")
+    entries, warnings = parse_biblatex_bbl(bbl)
+    assert warnings == [], warnings
+    assert len(entries) == 1
+    assert entries[0].original_key == "smith2020"
+    assert entries[0].fields["author"] == "Smith, John and Doe, Jane"
+    assert entries[0].fields["url"] == "https://example.org/abc%20def"
+
+    document = GatheredDocument(
+        "2507.11662", 1, "main.tex", r"\cite{smith2020}", [],
+        {"main.bbl": bbl}, "ok")
+    normalized = extract_bibliography(document)
+    assert len(normalized) == 1
+    assert normalized[0].fields["title"] == "A Novel Study"
+    assert normalized[0].fields["authors"] == ["John Smith", "Jane Doe"]
+    assert normalized[0].fields["year"] == 2020
+    assert normalized[0].fields["journal"] == "Nature"
+    assert normalized[0].fields["doi"] == "10.1000/abc"
+    assert normalized[0].fields["url"] == "https://example.org/abc%20def"
+
+
+def test_biber_bbl_does_not_override_existing_bib_key():
+    doc = GatheredDocument(
+        "2507.11662", 1, "main.tex", r"\cite{x}", [],
+        {"refs.bib": "@article{x,title={Original},year={2020}}",
+         "main.bbl": (r"\entry{x}{article}{}" 
+                      r"\field{title}{Different}"
+                      r"\field{year}{2020}"
+                      r"\endentry")}, "ok")
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    result, warnings = extract_bibliography_detailed(doc)
+    assert len(result) == 1
+    assert result[0].fields["title"] == "Original"
+    assert any("duplicate key" in warning for warning in warnings)
+
+
+def test_biber_bbl_partial_recovery_reports_truncated_entries():
+    from m2.src.parsing.biblatex_bbl import parse_biblatex_bbl
+    entries, warnings = parse_biblatex_bbl(
+        r"\entry{ok}{article}{}\field{title}{Valid}\endentry"
+        r"\entry{broken}{article}{}\field{title}{Incomplete}")
+    assert [entry.original_key for entry in entries] == ["ok"]
+    assert any("BBL_TRUNCATED_ENTRY" in w for w in warnings)
