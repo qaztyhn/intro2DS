@@ -453,7 +453,10 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
     for path in [p for p in paths if not p.lower().endswith(".bbl")]:
         sources.append((path, *parse_bib(document.bib_files[path])))
     for path in [p for p in paths if p.lower().endswith(".bbl")]:
-        sources.append((path, *parse_bibitems(document.bib_files[path])))
+        parsed, warns = parse_bibitems(document.bib_files[path])
+        if not parsed and document.bib_files[path].strip() and not warns:
+            warns.append("BBL_NO_BIBITEM: unsupported or empty bibliography format")
+        sources.append((path, parsed, warns))
     sources.append(("<latex>", *parse_bibitems(document.latex)))
 
     entries: list[BibEntry] = []

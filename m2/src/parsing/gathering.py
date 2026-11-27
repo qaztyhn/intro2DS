@@ -333,7 +333,7 @@ class Context:
         self.names = set()
         for name in source.source_files:
             relative = relative_path(name)
-            if PurePosixPath(relative).suffix.lower() not in ('.tex', '.bib'):
+            if PurePosixPath(relative).suffix.lower() not in ('.tex', '.bib', '.bbl'):
                 raise GatheringError('INVALID_SOURCE_TYPE', relative)
             if relative in self.names: raise GatheringError('DUPLICATE_SOURCE_PATH', relative)
             self.names.add(relative)
@@ -404,6 +404,29 @@ class Context:
             return None
         return next(iter(candidates))
 
+    def _load_bbl(self, path, origin):
+        """Read only a manifest-declared .bbl; preserve normal resource limits."""
+        if path in self.bibs:
+            return
+        try:
+            self.bibs[path] = self.read(path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            if isinstance(exc, GatheringError) and exc.code.endswith('LIMIT'):
+                raise
+            self.warn(getattr(exc, 'code', 'BBL_READ_FAILED'), origin, str(exc))
+
+    def attach_root_bbl(self):
+        """Attach the compilation root's .bbl, not arbitrary unused files."""
+        root_path = PurePosixPath(self.root)
+        candidates = {str(root_path.with_suffix('.bbl'))}
+        if root_path.parent != PurePosixPath('.'):
+            candidates.add(root_path.stem + '.bbl')
+        found = sorted(candidates & self.names)
+        if len(found) > 1:
+            self.warn('AMBIGUOUS_BBL_RESOURCE', self.root, ', '.join(found))
+        elif found:
+            self._load_bbl(found[0], self.root)
+
     def expand(self, name, stack=()):
         if name in stack:
             self.warn('INCLUDE_CYCLE', name, ' -> '.join((*stack, name)))
@@ -449,7 +472,12 @@ class Context:
                 else:
                     target = self.resolve(origin, payload, '.tex')
                     if target is not None:
-                        if not target.lower().endswith('.tex'):
+                        if target.lower().endswith('.bbl'):
+                            # Reference entries are extracted separately, not
+                            # inserted into the document hierarchy.
+                            self._load_bbl(target, origin)
+                            replacement = ''
+                        elif not target.lower().endswith('.tex'):
                             self.warn('NON_TEX_INCLUDE', origin, target)
                         else:
                             expanded = self.expand(target, stack)
@@ -528,6 +556,7 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
                              'candidates=' + ', '.join(original_roots))
         result.root_file = context.root
         result.latex = context.expand(context.root) or ''
+        context.attach_root_bbl()
         result.included_files, result.bib_files = context.included, context.bibs
         result.warnings = context.warnings
         result.status = 'partial' if result.warnings else 'ok'

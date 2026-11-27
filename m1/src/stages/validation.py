@@ -87,8 +87,8 @@ def validate_manifest(record, *, arxiv_id=None, version=None, source_dir=None):
             if name in names:
                 _issue(issues, "DUPLICATE_SOURCE", field, "duplicate normalized file path")
             names.add(name)
-            if pathlib.PurePosixPath(name).suffix.lower() not in {".tex", ".bib"}:
-                _issue(issues, "INVALID_SOURCE_TYPE", field, "only .tex/.bib files are allowed")
+            if pathlib.PurePosixPath(name).suffix.lower() not in {".tex", ".bib", ".bbl"}:
+                _issue(issues, "INVALID_SOURCE_TYPE", field, "only .tex/.bib/.bbl files are allowed")
             if source_dir is not None:
                 target = safe_path(source_dir, name)
                 if not target.is_file():

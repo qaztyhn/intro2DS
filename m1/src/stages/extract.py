@@ -1,6 +1,6 @@
 """Offline, bounded source extraction and the driver's per-paper hook.
 
-Only regular .tex/.bib files enter source/. Bytes and relative paths are kept.
+Only regular .tex/.bib/.bbl files enter source/. Bytes and relative paths are kept.
 No tarfile.extract/all calls: links, special entries and unsafe names fail closed.
 """
 
@@ -122,7 +122,7 @@ def _extract_tar(payload, stage, limits):
             total += member.size
             if total > limits.max_unpacked_bytes:
                 raise CrawlError("archive exceeds unpacked size limit", CORRUPT_SOURCE)
-            keep = pathlib.PurePosixPath(name).suffix.lower() in {".tex", ".bib"}
+            keep = pathlib.PurePosixPath(name).suffix.lower() in {".tex", ".bib", ".bbl"}
             with archive.extractfile(member) as source:
                 if keep:
                     target = safe_path(stage, name)
@@ -267,7 +267,7 @@ def _completed_source(manifest, source_dir):
         if not isinstance(files, list) or len(files) != len(set(files)):
             return False
         paths = [safe_path(source_dir, f) for f in files]
-        if any(not p.is_file() or p.suffix.lower() not in {".tex", ".bib"} for p in paths):
+        if any(not p.is_file() or p.suffix.lower() not in {".tex", ".bib", ".bbl"} for p in paths):
             return False
         has_tex = any(p.suffix.lower() == ".tex" for p in paths)
         if (manifest["extract_status"] == OK) != has_tex:
