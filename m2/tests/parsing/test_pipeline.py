@@ -168,3 +168,35 @@ def test_unexpected_gather_exception_is_logged_and_isolated(multiversion, monkey
     assert [row['status'] for row in result.version_status] == ['failed', 'ok', 'no_tex', 'failed']
     assert 'synthetic gather failure' in caplog.text
     assert {row['version'] for row in result.hierarchy} == {2}
+
+
+def test_m1_manifest_bbl_to_m2_bibtex_schema(tmp_path):
+    from m1.src.utils.common import paper_key
+    from m2.src.parsing.export import BIBTEX_SCHEMA
+
+    base = tmp_path / "run"
+    paper = base / "papers" / paper_key(ID)
+    source = paper / "versions/v1/source"
+    source.mkdir(parents=True)
+    (paper / "metadata.json").write_text(json.dumps({"arxiv_id": ID, "versions": [1]}))
+    (source / "main.tex").write_text(
+        r"\documentclass{article}\begin{document}\section{Intro}"
+        r"A citation \cite{x}.\end{document}")
+    (source / "main.bbl").write_text(
+        r"\begin{thebibliography}{1}" "\n"
+        r"\bibitem{x} A. Smith." "\n"
+        r"\newblock A Study in Parsing." "\n"
+        r"\newblock \emph{Nature}, 2020." "\n"
+        r"\end{thebibliography}")
+    manifest = make_manifest(ID, 1)
+    manifest.update(download_status="ok", extract_status="ok", source_format="tar",
+                    source_files=["main.tex", "main.bbl"], error_code=None)
+    (source.parent / "manifest.json").write_text(json.dumps(manifest))
+    result = pipeline.process_publication_detailed(base, ID)
+    assert result.version_status[0]["status"] == "ok", result.version_status
+    assert len(result.bibtex) == 1
+    assert result.bibtex[0]["citation_key"] == "x"
+    assert result.bibtex[0]["title"] == "A Study in Parsing"
+    export_tables(result.elements, result.hierarchy, result.bibtex, tmp_path / "tables")
+    assert pq.read_schema(tmp_path / "tables/bibtex.parquet").equals(BIBTEX_SCHEMA)
+    assert validate_tables(tmp_path / "tables")["passed"]

@@ -314,3 +314,28 @@ def test_header_budget_is_per_member_not_per_archive(tmp_path):
     result, output = extract(tmp_path, stream.getvalue())
     assert result["error_code"] is None
     assert result["extract_status"] == "ok"
+
+def test_bbl_retained_and_validated(tmp_path):
+    from m1.src.stages.validation import validate_manifest
+    bbl = b"\\begin{thebibliography}{1}\n\\bibitem{k} A Author.\n\\end{thebibliography}"
+    data = tar_bytes({"main.tex": TEX, "main.bbl": bbl, "figure.png": b"picture"})
+    result, output = extract(tmp_path, data)
+    assert result["extract_status"] == "ok"
+    assert result["source_files"] == ["main.bbl", "main.tex"]
+    assert (output / "main.bbl").read_bytes() == bbl
+    assert result["kept_source_bytes"] == len(TEX) + len(bbl)
+    manifest = make_manifest("2507.01659", 1)
+    manifest.update(download_status="ok", extract_status="ok", source_format="tar",
+                    source_files=result["source_files"], archive_bytes=len(data),
+                    unpacked_total_bytes=result["unpacked_total_bytes"],
+                    kept_source_bytes=result["kept_source_bytes"], error_code=None)
+    assert not [i for i in validate_manifest(manifest, arxiv_id="2507.01659",
+              version=1, source_dir=output) if i["severity"] == "error"]
+
+
+def test_bbl_only_is_still_no_tex(tmp_path):
+    result, output = extract(tmp_path, tar_bytes({"refs.bbl": b"\\bibitem{k} x"}))
+    assert result["extract_status"] == "empty"
+    assert result["error_code"] == "NO_TEX_SOURCE"
+    assert result["source_files"] == ["refs.bbl"]
+    assert (output / "refs.bbl").is_file()

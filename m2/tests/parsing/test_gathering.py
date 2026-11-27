@@ -313,3 +313,39 @@ def test_conditional_macro_with_unbraced_control_token_does_not_follow_branches(
     assert result.status == 'partial'
     assert any('UNRESOLVED_CONDITIONAL' in w for w in result.warnings)
     assert not any('MISSING_DEPENDENCY' in w for w in result.warnings)
+
+
+def test_compilation_root_bbl_included_unused_bbl_ignored(tmp_path):
+    item = source(tmp_path, {
+        "main.tex": r"\documentclass{article}\begin{document}Text \cite{x}.\end{document}",
+        "main.bbl": r"\bibitem{x} Smith 2020.",
+        "unused.bbl": r"\bibitem{unused} Jones 2020.",
+    })
+    result = module.gather_source(item)
+    assert result.status == "ok", result.warnings
+    assert list(result.bib_files) == ["main.bbl"]
+    assert "unused" not in result.latex
+
+
+def test_explicit_bbl_input_does_not_enter_hierarchy(tmp_path):
+    item = source(tmp_path, {
+        "main.tex": (r"\documentclass{article}\begin{document}"
+                     r"Text \cite{x}.\input{bib/refs.bbl}\end{document}"),
+        "bib/refs.bbl": r"\bibitem{x} Smith 2020.",
+    })
+    result = module.gather_source(item)
+    assert result.status == "ok", result.warnings
+    assert list(result.bib_files) == ["bib/refs.bbl"]
+    assert r"\bibitem" not in result.latex
+
+
+def test_two_root_bbl_paths_are_ambiguous(tmp_path):
+    item = source(tmp_path, {
+        "nested/main.tex": r"\documentclass{article}\begin{document}X\end{document}",
+        "nested/main.bbl": r"\bibitem{x} A.",
+        "main.bbl": r"\bibitem{y} B.",
+    })
+    result = module.gather_source(item)
+    assert result.status == "partial"
+    assert not result.bib_files
+    assert any("AMBIGUOUS_BBL_RESOURCE" in w for w in result.warnings)

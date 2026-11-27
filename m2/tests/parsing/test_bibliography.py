@@ -688,3 +688,27 @@ def test_bibitem_without_quotes_stays_raw_only():
 def test_bibitem_parse_mode_newblock():
     e = parse_bibitems("\\bibitem{a} A. B.\n\\newblock A Title Here.\n\\newblock Journal, 2020.")[0][0]
     assert e.fields["parse_mode"] == "newblock"
+
+
+def test_bbl_conversion_yields_normalized_bibtex():
+    bbl = (r"\begin{thebibliography}{1}" "\n"
+           r"\bibitem{x} J.~Smith and A.~Doe." "\n"
+           r"\newblock A Great Paper." "\n"
+           r"\newblock \emph{Nature}, 2020." "\n"
+           r"\end{thebibliography}")
+    doc = GatheredDocument("2507.11662", 1, "main.tex",
+                           r"\cite{x}", [], {"main.bbl": bbl}, "ok")
+    entries = extract_bibliography(doc)
+    assert len(entries) == 1
+    assert entries[0].original_key == "x"
+    assert entries[0].fields["title"] == "A Great Paper"
+    assert entries[0].fields["year"] == 2020
+
+
+def test_bbl_with_no_bibitem_is_reported():
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    doc = GatheredDocument("2507.11662", 1, "main.tex", "", [],
+                           {"main.bbl": r"\refsection{0}\entry{x}{article}{}"}, "ok")
+    entries, warnings = extract_bibliography_detailed(doc)
+    assert entries == []
+    assert any("BBL_NO_BIBITEM" in message for message in warnings)
