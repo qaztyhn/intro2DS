@@ -4,10 +4,13 @@ New M1 source archives retain regular .tex, .bib, and .bbl files, including thei
 
 M2 chooses the compilation root using its existing algorithm. It loads a manifest-declared BBL matching the root basename (root directory or source top level), or an explicitly included BBL file. It ignores unrelated BBL files. If two root BBL paths compete, it emits AMBIGUOUS_BBL_RESOURCE and does not guess.
 
-The existing parse_bibitems(), normalize_entry() and unify_bibliography() handle BBL citation entries and cross-version deduplication. Biblatex BBL files with no parseable bibitem cause BBL_NO_BIBITEM; these are not silently claimed as converted. The M2 Parquet schemas in export.py remain unchanged.
+The existing parse_bibitems(), normalize_entry() and unify_bibliography() handle BBL citation entries and cross-version deduplication. Biber/BibLaTeX BBL files containing structured `\\entry` blocks are now processed by `m2/src/parsing/biblatex_bbl.py`: supported metadata includes `\\field`, `\\verb`, `\\name{author}` and `\\list`; all records still pass through `normalize_entry()` and cross-version deduplication. Malformed/truncated records emit BBL_* diagnostics. This is a conservative subset, not full coverage of all Biber versions or custom macros. The M2 Parquet schemas in export.py remain unchanged.
 
 Existing M1 ZIPs are not modified, and discarded BBL files cannot be reconstructed from them. Re-download original source archives if needed, and re-extract to a NEW M1 run rather than mutating completed runs. Preserve old ZIPs.
 
 Tests: python -m pytest m1/tests/test_extract.py m1/tests/test_validation.py m2/tests/parsing/test_gathering.py m2/tests/parsing/test_bibliography.py m2/tests/parsing/test_pipeline.py
 
 Only the branch feat/m1-m2-preserve-convert-bbl is modified; main is unchanged.
+
+
+Biber syntax test coverage: multiple entries, nested author names, preserved percent-escaped URL strings in verbatim data, DOI/title/year/journal normalization, duplicate citation keys with .bib precedence, and truncated records. Follow up with sampled real Biber .bbl files for coverage measurements before claiming all references are recovered.
