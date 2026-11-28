@@ -79,6 +79,20 @@ def test_unknown_bbl_is_retained_and_warns_m2_instead_of_silently_disappearing(t
     assert 'unconverted_source_assets' in report['retry_plan'][0]['review_reasons']
 
 
+def test_unclosed_biber_record_recovers_next_entry_and_preserves_partial_status(tmp_path):
+    main=r'\documentclass{article}\begin{document}\section{Intro}Cites \cite{good}.\bibliography{refs}\end{document}'
+    bbl=(r'\entry{bad}{article}{}\field{title}{Broken'+ '\n'+
+         r'\entry{good}{article}{}\field{title}{Good Title}\field{year}{2024}\endentry')
+    cfg,paper,_=setup(tmp_path,{'main.tex':main.encode(),'main.bbl':bbl.encode()})
+    manifest=extract_version(cfg,IDENTITY,1)
+    assert any('BBL_TRUNCATED_ENTRY' in w for w in manifest['recovery_bibliography_warnings'])
+    assert (paper/'versions/v1/original_assets/main.bbl').read_text(encoding='utf-8')==bbl
+    result=process_publication_detailed(tmp_path/'offline',IDENTITY)
+    assert result.version_status[0]['status']=='partial'
+    assert result.version_status[0]['missing_citation_keys']==[]
+    assert len(result.bibtex)==1 and result.bibtex[0]['title']=='Good Title'
+
+
 def test_pdf_only_archive_is_empty_audited_and_not_a_retry_candidate(tmp_path):
     cfg,paper,archive=seed_version(tmp_path,content=b'%PDF-1.4\nfixture')
     write_json_atomic(paper/'metadata.json',dict(arxiv_id=IDENTITY,status='ok',versions=[1]))

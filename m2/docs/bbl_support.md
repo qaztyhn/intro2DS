@@ -19,6 +19,7 @@ Biber syntax test coverage: multiple entries, nested author names, preserved per
 ## Regression hardening (post-review)
 
 - A structured Biber `\\entry` missing `\\endentry` is reported as `BBL_TRUNCATED_ENTRY`; its metadata is not merged with the next entry. The parser resumes at the next record, and subsequent valid records can still be recovered.
+- An unclosed field/name brace group also allows recovery at a subsequent explicit record header, while retaining the truncation warning. Entry-like literals in completed brace groups or verbatim payloads remain field content. The recovered record is parsed independently; M1 retains original BBL bytes and carries the warning into M2 partial status.
 - BBL dialect detection happens only after stripping LaTeX comments. A commented `\\entry` cannot hide genuine `\\bibitem` references.
 - A `.bib` followed by a compiled `.bbl` with the same citation key is normal. Native populated values are kept; compatible missing fields can be enriched. Comparison uses canonical fields and conservative identity checks, with per-source decisions in bibliography_reconciliation. Identical or complementary BBL metadata does not demote an otherwise `ok` paper to `partial`; conflicting fields are still reported. New integration tests exercise end-to-end QA status.
 

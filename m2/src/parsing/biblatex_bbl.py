@@ -206,6 +206,8 @@ def _next_entry_boundary(text: str, start: int) -> tuple[str, int, int] | None:
     """
     i = start
     depth = 0
+    recovery = None
+    recovery_depth = 0
     while i < len(text):
         ch = text[i]
         if ch == "\\":
@@ -224,10 +226,20 @@ def _next_entry_boundary(text: str, start: int) -> tuple[str, int, int] | None:
                             return None
                         i = end + len(r"\endverb")
                         continue
-            if depth == 0:
-                entry = _ENTRY.match(text, i)
-                if entry:
+            entry = _ENTRY.match(text, i)
+            if entry:
+                if depth == 0:
                     return "entry", entry.start(), entry.end()
+                if recovery is None:
+                    try:
+                        (key, kind, _opts), _ = _arguments(text, entry.end(), 3)
+                    except ValueError:
+                        pass
+                    else:
+                        if key.strip() and re.fullmatch(r'[A-Za-z]+', kind.strip()):
+                            recovery = ("entry", entry.start(), entry.end())
+                            recovery_depth = depth
+            if depth == 0:
                 endentry = _END_ENTRY.match(text, i)
                 if endentry:
                     return "endentry", endentry.start(), endentry.end()
@@ -238,8 +250,15 @@ def _next_entry_boundary(text: str, start: int) -> tuple[str, int, int] | None:
             depth += 1
         elif ch == "}":
             depth = max(0, depth - 1)
+            # A candidate inside a completed field was literal field content.
+            # Keep it only while its enclosing malformed group stays unclosed.
+            if recovery is not None and depth < recovery_depth:
+                recovery = None
         i += 1
-    return None
+    # No normal boundary exists. Resume from an explicit record header trapped
+    # by an unclosed field/name group; the caller reports the broken record and
+    # independently parses the following record before retaining any metadata.
+    return recovery if depth else None
 
 
 def parse_biblatex_bbl(text: str) -> tuple[list[BibEntry], list[str]]:

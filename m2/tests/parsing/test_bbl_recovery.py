@@ -1,5 +1,7 @@
 """Regression checks for bounded BBL recovery and derived BibTeX files."""
 
+import pytest
+
 from m2.src.parsing.biblatex_bbl import biblatex_bbl_to_bibtex, parse_biblatex_bbl
 from m2.src.parsing.bibliography import extract_bibliography_detailed, normalize_entry, parse_bib
 from m2.src.parsing.contracts import GatheredDocument
@@ -7,6 +9,37 @@ from m2.src.parsing.contracts import GatheredDocument
 
 def document(files):
     return GatheredDocument('2507.00001', 1, 'main.tex', r'\cite{x}', [], files, 'ok')
+
+
+@pytest.mark.parametrize('separator',['','\n'])
+@pytest.mark.parametrize('broken',[
+    r'\field{title}{Broken',
+    r'\name{author}{1}{}{family={Broken',
+    r'\field{title}{Literal \entry{fake}{book}{} title}\field{note}{Broken',
+])
+def test_unclosed_group_does_not_hide_intact_following_biber_records(broken,separator):
+    raw=(r'\entry{bad}{article}{}'+broken+separator+
+         r'\entry{good}{article}{}\field{title}{Good Title}\field{year}{2024}\endentry'+
+         r'\entry{second}{book}{}\field{title}{Second Title}\endentry')
+    entries,warnings=parse_biblatex_bbl(raw)
+    assert [e.original_key for e in entries]==['good','second']
+    assert entries[0].fields=={'title':'Good Title','year':'2024'}
+    assert len(warnings)==1 and 'BBL_TRUNCATED_ENTRY key=bad' in warnings[0]
+
+
+def test_missing_endentry_does_not_promote_literal_entry_inside_a_closed_field():
+    raw=r'\entry{bad}{article}{}\field{title}{Literal \entry{fake}{book}{} title}'
+    entries,warnings=parse_biblatex_bbl(raw)
+    assert not entries
+    assert len(warnings)==1 and 'BBL_TRUNCATED_ENTRY key=bad' in warnings[0]
+
+
+def test_intact_biber_field_and_verbatim_entry_literals_remain_metadata():
+    raw=(r'\entry{real}{article}{}\field{title}{Literal \entry{fake}{book}{} title}'
+         r'\verb{url}\verb https://example.org/\entry{fakeurl}{book}{}\endverb\endentry')
+    entries,warnings=parse_biblatex_bbl(raw)
+    assert [e.original_key for e in entries]==['real']
+    assert not warnings
 
 
 def test_missing_endentry_quarantines_record_and_recovers_next():
