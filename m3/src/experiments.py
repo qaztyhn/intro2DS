@@ -421,6 +421,7 @@ def run_experiments(*, pairs: pa.Table, labels: pa.Table, splits: pa.Table, seed
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text + "\n")
+        os.chmod(tmp, 0o644)                                   # mkstemp tạo file 0600
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

@@ -11,7 +11,7 @@ from m3.src.model import fit_ranker, predict_top5
 from m3.tests.test_model import make_synth
 
 SRC = Path(__file__).resolve().parents[1] / "src"
-TV3_MODULES = ["model.py", "evaluate.py", "experiments.py"]
+TV3_MODULES = ["model.py", "evaluate.py", "experiments.py", "run_tv3.py"]
 BANNED = ("requests", "urllib.request", "huggingface_hub", "transformers", "sentence_transformers", "nltk", "spacy",
           "urllib3", "http.client", "socket", "ftplib", "rapidfuzz")
 
