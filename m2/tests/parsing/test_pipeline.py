@@ -200,3 +200,75 @@ def test_m1_manifest_bbl_to_m2_bibtex_schema(tmp_path):
     export_tables(result.elements, result.hierarchy, result.bibtex, tmp_path / "tables")
     assert pq.read_schema(tmp_path / "tables/bibtex.parquet").equals(BIBTEX_SCHEMA)
     assert validate_tables(tmp_path / "tables")["passed"]
+
+
+def test_m1_bib_and_equivalent_bbl_remain_ok(tmp_path):
+    """Loading the compilation root's BBL must not demote a healthy .bib."""
+    from m1.src.utils.common import paper_key
+
+    base = tmp_path / "run"
+    paper = base / "papers" / paper_key(ID)
+    source = paper / "versions/v1/source"
+    source.mkdir(parents=True)
+    (paper / "metadata.json").write_text(
+        json.dumps({"arxiv_id": ID, "versions": [1]}))
+    files = {
+        "main.tex": (r"\documentclass{article}\begin{document}"
+                     r"\section{Intro} Cites \cite{x}.\bibliography{refs}"
+                     r"\end{document}"),
+        "refs.bib": "@article{x,title={Shared Title},year={2020}}",
+        "main.bbl": (r"\entry{x}{article}{}"
+                     r"\field{title}{Shared Title}"
+                     r"\field{year}{2020}"
+                     r"\endentry"),
+    }
+    for name, content in files.items():
+        (source / name).write_text(content, encoding="utf-8")
+    manifest = make_manifest(ID, 1)
+    manifest.update(download_status="ok", extract_status="ok",
+                    source_format="tar", source_files=list(files),
+                    error_code=None)
+    (source.parent / "manifest.json").write_text(json.dumps(manifest))
+
+    result = pipeline.process_publication_detailed(base, ID)
+    assert result.version_status[0]["status"] == "ok", result.version_status
+    assert result.version_status[0]["bibliography_parse_warnings"] == 0
+    assert len(result.bibtex) == 1
+    assert result.bibtex[0]["citation_key"] == "x"
+    assert result.bibtex[0]["title"] == "Shared Title"
+    export_tables(result.elements, result.hierarchy, result.bibtex,
+                  tmp_path / "tables")
+    assert validate_tables(tmp_path / "tables")["passed"]
+
+
+def test_m1_bib_and_conflicting_bbl_are_partial(tmp_path):
+    from m1.src.utils.common import paper_key
+
+    base = tmp_path / "run"
+    paper = base / "papers" / paper_key(ID)
+    source = paper / "versions/v1/source"
+    source.mkdir(parents=True)
+    (paper / "metadata.json").write_text(
+        json.dumps({"arxiv_id": ID, "versions": [1]}))
+    files = {
+        "main.tex": (r"\documentclass{article}\begin{document}"
+                     r"\section{Intro} Cites \cite{x}.\bibliography{refs}"
+                     r"\end{document}"),
+        "refs.bib": "@article{x,title={Original},year={2020}}",
+        "main.bbl": (r"\entry{x}{article}{}"
+                     r"\field{title}{Conflicting}"
+                     r"\field{year}{2020}"
+                     r"\endentry"),
+    }
+    for name, content in files.items():
+        (source / name).write_text(content, encoding="utf-8")
+    manifest = make_manifest(ID, 1)
+    manifest.update(download_status="ok", extract_status="ok",
+                    source_format="tar", source_files=list(files),
+                    error_code=None)
+    (source.parent / "manifest.json").write_text(json.dumps(manifest))
+    result = pipeline.process_publication_detailed(base, ID)
+    assert result.version_status[0]["status"] == "partial", result.version_status
+    assert result.version_status[0]["bibliography_parse_warnings"] == 1
+    assert len(result.bibtex) == 1
+    assert result.bibtex[0]["title"] == "Original"
