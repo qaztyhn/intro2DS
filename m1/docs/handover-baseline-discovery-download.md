@@ -60,7 +60,7 @@ Quy tắc chung:
 - Chỉ giữ `.tex`/`.bib`, giữ đường dẫn tương đối, không sửa nội dung. Gợi ý đặt ở `papers/<key>/versions/v<N>/source/`.
 - Cập nhật manifest: `extract_status`, `source_files`, `unpacked_total_bytes`, `kept_source_bytes`, `error_code`.
 - `pdf` hoặc không có TeX: `extract_status = "empty"`, `error_code = "NO_TEX_SOURCE"`. Định dạng `unknown`: `failed` với `UNSUPPORTED_FORMAT`, **không** coi là rỗng.
-- Nên xóa `tmp/.../source.archive` sau khi extract xong để giảm đĩa. Phải ghi `archive_bytes` trước khi xóa (hiện đã ghi sẵn).
+- Với luồng preserve/convert hiện tại, giữ `tmp/.../source.archive` và xuất kèm khi lưu run để có thể audit/retry các định dạng bị lọc. Xem [SOURCE_RECOVERY.md](SOURCE_RECOVERY.md) cho luồng hiện hành và báo cáo quyết định giữ/lọc file.
 - Trong tập thử 20 bài có 1 phiên bản `pdf`, dùng nó để kiểm tra trường hợp rỗng.
 
 ### Châu: `src/stages/references.py`, `src/utils/http.py`

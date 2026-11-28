@@ -1,7 +1,8 @@
 """Baseline source download: HTTP GET https://export.arxiv.org/src/<id>v<N>, one request per version.
 
 Reads   <run_dir>/papers/<paper_key>/metadata.json   (written by discovery)
-Writes  <run_dir>/tmp/<paper_key>/v<N>/source.archive   (temporary; extract may delete it)
+Writes <run_dir>/tmp/<paper_key>/v<N>/source.archive.
+Preserve/convert extraction retains this raw archive for auditing and retries.
         <run_dir>/papers/<paper_key>/versions/v<N>/manifest.json
 
 The manifest follows the per-version record of Intro2DS_Project.md (section 1.B).

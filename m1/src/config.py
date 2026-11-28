@@ -60,6 +60,10 @@ def load_config(path: Optional[pathlib.Path] = None) -> Dict[str, Any]:
     if not isinstance(cfg["max_retries"], int) or cfg["max_retries"] < 0:
         raise ConfigError("max_retries must be a non-negative integer")
 
+    if type(cfg.get('preserve_source_assets',True)) is not bool:
+        raise ConfigError('preserve_source_assets must be a boolean')
+    cfg.setdefault('preserve_source_assets',True)
+
     if cfg.get("s2_max_retries") is not None and (
             type(cfg["s2_max_retries"]) is not int or cfg["s2_max_retries"] < 0):
         raise ConfigError("s2_max_retries must be a non-negative integer")

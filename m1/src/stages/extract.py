@@ -100,7 +100,7 @@ def _members(archive, reader):
         reader.in_data = True  # from here until the next start_header, only data is read
         yield member
         
-def _extract_tar(payload, stage, limits):
+def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), inventory=None):
     total, kept, files, seen = 0, 0, [], set()
     with payload.open("rb") as handle, tarfile.open(fileobj=(reader := _TarReader(handle)), mode="r:") as archive:
         for count, member in enumerate(_members(archive, reader), 1):
@@ -122,7 +122,8 @@ def _extract_tar(payload, stage, limits):
             total += member.size
             if total > limits.max_unpacked_bytes:
                 raise CrawlError("archive exceeds unpacked size limit", CORRUPT_SOURCE)
-            keep = pathlib.PurePosixPath(name).suffix.lower() in {".tex", ".bib", ".bbl"}
+            keep = (name in source_names or pathlib.PurePosixPath(name).suffix.lower()
+                    in (source_suffixes if source_suffixes is not None else {".tex", ".bib", ".bbl"}))
             with archive.extractfile(member) as source:
                 if keep:
                     target = safe_path(stage, name)
@@ -132,9 +133,17 @@ def _extract_tar(payload, stage, limits):
                     files.append(name)
                     kept += actual
                 else:
-                    actual = _copy(source, None, limits.max_file_bytes)
+                    head = source.read(min(65536, member.size))
+                    actual = len(head) + _copy(source, None, limits.max_file_bytes - len(head))
             if actual != member.size:
                 raise CrawlError(f"truncated archive entry: {name}", CORRUPT_SOURCE)
+            if inventory is not None:
+                inventory.append(dict(path=name, bytes=actual,
+                    suffix=pathlib.PurePosixPath(name).suffix.lower() or '<none>',
+                    disposition='retained' if keep else 'filtered',
+                    reason='selected_source_asset' if keep else 'suffix_not_selected',
+                    source_like=False if keep else bool(_is_tex(head) or (
+                        b'\0' not in head and re.search(rb'(?mi)^\s*@[A-Za-z]+\s*[{(]', head)))))
     return sorted(files), total, kept
 
 
@@ -182,7 +191,8 @@ def _same_output(existing, staged, files):
     return True
 
 
-def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=False):
+def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=False,
+                   source_suffixes=None, source_names=()):
     """Return extraction fields plus output_path/message, without writing a manifest.
 
     Existing nonempty output is never replaced. reuse_existing permits recovery
@@ -193,7 +203,8 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
     result = dict(extract_status=FAILED, source_format=None, source_files=[],
                   archive_bytes=None, unpacked_total_bytes=None,
                   kept_source_bytes=None, error_code=None,
-                  output_path=str(output_dir), message=None)
+                  output_path=str(output_dir), message=None,
+                  asset_inventory=[], archive_scan_complete=False)
     try:
         archive_path = no_symlinks(archive_path)
         output_dir = no_symlinks(output_dir)
@@ -229,9 +240,12 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
                 result["source_format"] = "gz" if compressed else "pdf"
                 files, kept = [], 0
                 total = _gzip_size(archive_path) if compressed else size
+                result['asset_inventory'].append(dict(path='<pdf-only-source>', bytes=total,
+                    suffix='.pdf', disposition='filtered', reason='pdf_only_source', source_like=False))
             elif _is_tar(payload):
                 result["source_format"] = "tar.gz" if compressed else "tar"
-                files, total, kept = _extract_tar(payload, stage, limits)
+                files, total, kept = _extract_tar(payload, stage, limits, source_suffixes, source_names,
+                                                result['asset_inventory'])
             elif head[257:262] == b"ustar":
                 raise CrawlError("corrupt tar header", CORRUPT_SOURCE)
             elif _is_tex(head):
@@ -239,9 +253,12 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
                 with payload.open("rb") as source, (stage / "main.tex").open("wb") as dest:
                     total = _copy(source, dest, min(limits.max_file_bytes, limits.max_unpacked_bytes))
                 files, kept = ["main.tex"], total
+                result['asset_inventory'].append(dict(path='main.tex', bytes=total, suffix='.tex',
+                    disposition='retained', reason='single_tex_source', source_like=True))
             else:
                 result["source_format"] = "gz" if compressed else "unknown"
                 raise CrawlError("source format is unsupported", UNSUPPORTED_FORMAT)
+            result['archive_scan_complete'] = True
             has_tex = any(pathlib.PurePosixPath(f).suffix.lower() == ".tex" for f in files)
             if output_dir.exists() and any(output_dir.iterdir()):
                 if not _same_output(output_dir, stage, files):
@@ -263,6 +280,15 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
 def _completed_source(manifest, source_dir):
     """Check cached output, including byte totals; never downgrade a terminal record."""
     try:
+        if manifest.get('source_asset_policy')=='preserve-convert-v1':
+            audit=read_json(safe_path(source_dir.parent,'source_assets_audit.json'))
+            if (not isinstance(audit,dict) or not audit.get('archive_scan_complete')
+                    or audit.get('arxiv_id')!=manifest.get('arxiv_id')
+                    or audit.get('version')!=manifest.get('version')
+                    or audit.get('policy')!=manifest['source_asset_policy']
+                    or not safe_path(source_dir.parent,'original_assets').is_dir()
+                    or not safe_path(source_dir.parent,'recovery_provenance.json').is_file()):
+                return False
         files = manifest["source_files"]
         if not isinstance(files, list) or len(files) != len(set(files)):
             return False
@@ -308,10 +334,26 @@ def extract_version(cfg, arxiv_id, version):
     except ValueError as exc:
         raise CrawlError(str(exc), CORRUPT_SOURCE) from exc
     limits = ExtractionLimits(**cfg.get("extraction_limits", {}))
-    result = extract_source(archive, source, limits=limits, reuse_existing=True)
+    if cfg.get('preserve_source_assets', True):
+        from .source_assets import extract_preserved_source
+        try:
+            result = extract_preserved_source(archive, directory, arxiv_id, version, limits=limits)
+        except (CrawlError, OSError, ValueError) as exc:
+            result = dict(extract_status=FAILED,source_format=None,source_files=[],
+                archive_bytes=None,unpacked_total_bytes=None,kept_source_bytes=None,
+                error_code=exc.error_code if isinstance(exc,CrawlError) else CORRUPT_SOURCE,
+                source_asset_policy='preserve-convert-v1',source_asset_audit='source_assets_audit.json')
+            audit=read_json(directory/'source_assets_audit.json') or {}
+            audit.update(arxiv_id=arxiv_id,version=version,publication_error=str(exc)[:300])
+            write_json_atomic(directory/'source_assets_audit.json',audit)
+    else:
+        result = extract_source(archive, source, limits=limits, reuse_existing=True)
     for key in ("extract_status", "source_format", "source_files", "archive_bytes",
                 "unpacked_total_bytes", "kept_source_bytes", "error_code"):
         if key not in {"source_format", "archive_bytes"} or result[key] is not None:
+            manifest[key] = result[key]
+    for key in ('source_asset_policy', 'source_asset_audit', 'recovery_bibliography_warnings'):
+        if key in result:
             manifest[key] = result[key]
     write_json_atomic(path, manifest)
     return manifest
@@ -347,6 +389,10 @@ def extract_paper(cfg, arxiv_id, logger, metrics_logger=None):
             logger.log("extract", status, arxiv_id=arxiv_id, version=version,
                        error_code=result.get("error_code"), elapsed_seconds=watch.elapsed,
                        message="using completed source" if cached else None)
+            if cfg.get('preserve_source_assets', True):
+                from .source_assets import log_asset_summary
+                log_asset_summary(result, directory=safe_path(paper, f'versions/v{version}'),
+                                  arxiv_id=arxiv_id, version=version, logger=logger, cached=cached)
         except (CrawlError, ValueError, OSError) as exc:
             code = exc.error_code if isinstance(exc, CrawlError) else INVALID_RESPONSE
             errors.append(code)

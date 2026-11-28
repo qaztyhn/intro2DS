@@ -194,7 +194,7 @@ def test_includeonly_and_known_conditionals(tmp_path):
 
 def test_unknown_condition_and_macro_directive_not_followed(tmp_path):
     result = module.gather_source(source(tmp_path, {'r.tex': '\\documentclass{article}'
-        '\\newcommand{\\load}{\\input{missing}}\\newif\\iffoo'
+        '\\newcommand{\\load}{\\input{missing}}'
         '\\iffoo\\input{missing}\\else\\input{also_missing}\\fi'}))
     assert result.status == 'partial'
     assert any('DEFERRED_MACRO_DIRECTIVE' in w for w in result.warnings)

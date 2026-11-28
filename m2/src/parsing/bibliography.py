@@ -8,11 +8,14 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from datetime import date as calendar_date
+from urllib.parse import urlsplit, unquote
 
 from typing import NamedTuple
 from collections.abc import Callable
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
-from .biblatex_bbl import parse_biblatex_bbl
+from .biblatex_bbl import is_biblatex_bbl, parse_biblatex_bbl, is_empty_bibliography
+from .amsrefs_bbl import is_amsrefs_bbl, parse_amsrefs_bbl
 
 log = logging.getLogger(__name__)
 
@@ -268,13 +271,18 @@ _COMMENT = re.compile(r"(?<!\\)%[^\n]*")
 _URL_ARG = re.compile(r"\\(?:url|href)\s*\{[^{}]*\}")
 _BIBITEM_CMD = re.compile(r"\\bibitem(?![A-Za-z])")
 _END_BIB = re.compile(r"\\end\s*\{thebibliography\}")
+_BIB_CONTEXT = re.compile(r"\\(?:begin|end)\s*\{thebibliography\}")
+_BIB_SPACING = re.compile(r"\\(?:BIBentryALTinterwordspacing|BIBentrySTDinterwordspacing|BIBdecl)(?![A-Za-z@])")
+_AUTHOR_WRAPPER = re.compile(r"\\(?:bibfnamefont|bibnamefont|citenamefont)(?![A-Za-z@])")
+_REPEATED_AUTHOR = re.compile(r"^\s*(?:-{3,}|[\u2013\u2014]{1,3}|\\(?:bysame|BIBdash)(?![A-Za-z@])(?:\s*\{\s*\})?)\s*[.,;:]*\s*$")
+_REPEATED_PREFIX = re.compile(r"^\s*(?:-{3,}|[\u2013\u2014]{1,3}|\\(?:bysame|BIBdash)(?![A-Za-z@])(?:\s*\{\s*\})?)")
 _NEWBLOCK = re.compile(r"\\newblock\b")
 _DOI = re.compile(r"10\.\d{4,9}/[^\s,;{}\]\"<>]+")
 _URL = re.compile(r"\\(?:url|href)\s*\{([^{}]*)\}|(https?://[^\s{}\\]+)")
 _ARXIV = re.compile(
     r"arXiv\s*:\s*(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})", re.I
 )
-_YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_YEAR = re.compile(r"(?<![\d.])(?:19|20)\d{2}(?!\d|\.\d)")
 _PAGES = re.compile(
     r"\b(?:pp?\.\s*|pp?\s+|pages?\s+)~?\s*\d+(?:\s*(?:-{1,3}|\u2013|\u2014)\s*\d+)?"
     r"|(?<![\d.])\d{1,6}\s*(?:-{1,3}|\u2013|\u2014)\s*\d{1,6}"
@@ -309,6 +317,61 @@ def _venue_text(block: str) -> str:
     return re.sub(r"^\s*in\b\s*:?\s*", "", text, flags=re.I).strip()
 
 
+def _bibitem_venue(block: str) -> str:
+    """Keep a venue name, excluding recognizable volume/pages/year suffixes."""
+    grouped = re.match(r'\s*(?:in\s+)?\{\s*\\em\s+', block, re.I)
+    if grouped:
+        try:
+            inner, end = _read_braced(block, block.index('{'))
+            tail = block[end:]
+            if re.match(r'\s*(?:,\s*\d+\s*)?\((?:19|20)\d{2}\)', tail):
+                name = clean_text(re.sub(r'^\s*\\em\s+', '', inner)).replace(r'\/', '').strip()
+                name = re.sub(r'\s+abs/\d{4}\.\d{4,5}(?:v\d+)?$', '', name)
+                if not _VENUE_HINT.search(name):
+                    name = re.sub(r'\s+\d+$', '', name)
+                return name.rstrip(' ,;')
+        except ValueError:
+            pass
+    text = clean_text(_venue_text(block))
+    if re.fullmatch(r'https?://\S+\.?', text, flags=re.I):
+        return ''  # A repository link is not a journal name.
+    suffix = re.search(r',\s*(?:(?:vol(?:ume)?|no|pp?|pages?)\.?\s|'
+                       r'\d+\s*(?:\([^)]{0,40}\))?\s*[:;,]|(?:19|20)\d{2}\b)', text, re.I)
+    if suffix:
+        text = text[:suffix.start()]
+    if (re.match(r'\s*\{\\em\s', block)
+            and re.search(r'\}\s*,\s*\d+\s*\(((?:19|20)\d{2})\)', block)):
+        # The explicit outer issue/date identifies the trailing number inside
+        # this old-style journal group as its volume, not part of the name.
+        text = re.sub(r'\s+\d+$', '', text)
+    return text.rstrip(' ,;')
+
+
+def _unwrap_links(text: str) -> str:
+    """Render visible href/hyperlink labels without interpreting arbitrary TeX."""
+    if '\\href' not in text and '\\hyperlink' not in text:
+        return text
+    output, pos = [], 0
+    for match in re.finditer(r'\\(?:href|hyperlink)(?![A-Za-z@])', text):
+        if match.start() < pos:
+            continue
+        start = _skip_ws(text, match.end())
+        if start >= len(text) or text[start] != '{':
+            continue
+        try:
+            _, end = _read_braced(text, start)
+            label_start = _skip_ws(text, end)
+            if label_start >= len(text) or text[label_start] != '{':
+                continue
+            label, end = _read_braced(text, label_start)
+        except ValueError:
+            continue
+        output.extend((text[pos:match.start()], label))
+        pos = end
+    output.append(text[pos:])
+    return ''.join(output)
+
+
 _QUOTED_TITLE = re.compile(
     r"(?:``|\u201c|(?<!\\)\")(.+?)(?:''|\u201d|(?<!\\)\")", re.S)
 
@@ -328,14 +391,278 @@ def _quoted_title_fields(body: str) -> dict[str, str] | None:
     if em:
         venue = _collapse(em.group(1))
         if re.search(r"\bin\s*:?\s*$", after[:em.start()], re.I) or _VENUE_HINT.search(venue):
-            out["booktitle"] = _venue_text(venue)
+            out["booktitle"] = _bibitem_venue(venue)
         else:
-            out["journal"] = venue
+            out["journal"] = _bibitem_venue(venue)
     return out
+
+
+def _emphasized_title_fields(body: str) -> dict[str, str] | None:
+    """Read the narrow 'initialled authors, emph{{title}}, emph{venue}' style.
+
+    Double braces, comma separation and recognizable personal-name initials are
+    required so an emphasized journal after prose is not reclassified as title.
+    """
+    match = re.search(r'\\emph\s*(?=\{)', body)
+    if match is None:
+        return None
+    prefix = body[:match.start()].strip()
+    if not prefix.endswith(','):
+        return None
+    author = prefix[:-1].strip()
+    if not _usable_explicit_bibitem_author(author):
+        return None
+    names = _authors_from_bibitem(author)
+    if not all(re.search(r'(?<![A-Za-z])[A-Z]\.', name) and len(name.split()) >= 2 for name in names):
+        return None
+    try:
+        inner, end = _read_braced(body, match.end())
+        inner = inner.strip()
+        if not inner.startswith('{'):
+            return None
+        title, title_end = _read_braced(inner, 0)
+        if inner[title_end:].strip() or not 5 <= len(title) <= 1000:
+            return None
+    except ValueError:
+        return None
+    after = _unwrap_links(body[end:])
+    if not after.lstrip().startswith(','):
+        return None
+    venue = _EMPH.search(after)
+    if venue is None:
+        return None
+    out = {'author': author, 'title': _collapse(title)}
+    venue_name = _bibitem_venue(venue.group())
+    if not venue_name:
+        return None
+    if re.search(r'\bin\s*:?\s*$', after[:venue.start()], re.I) or _VENUE_HINT.search(venue_name):
+        out['booktitle'] = venue_name
+    else:
+        out['journal'] = venue_name
+    return out
+
+
+def _emphasized_venue_year(body: str) -> str | None:
+    """Read the explicit venue date even when the author is a collaboration.
+
+    The format must contain a balanced double-braced title, a separate
+    emphasized venue, then optional bold volume followed by (publication year).
+    No person/corporation name is inferred from the prefix.
+    """
+    first = re.search(r'\\emph\s*(?=\{)', body)
+    if first is None:
+        return None
+    try:
+        title, end = _read_braced(body, first.end())
+        title = title.strip()
+        if not title.startswith('{'):
+            return None
+        _, title_end = _read_braced(title, 0)
+        if title[title_end:].strip():
+            return None
+    except ValueError:
+        return None
+    after = _unwrap_links(body[end:])
+    venue = _EMPH.search(after)
+    if venue is None:
+        return None
+    date = re.match(r'\s*(?:\{\\bfseries\s+\d+\}\s*)?\(((?:19|20)\d{2})\)', after[venue.end():])
+    return date[1] if date else None
+
+
+def _emphasized_first_block_fields(block: str) -> dict[str, str] | None:
+    """Read initialled authors plus an emphasized title before continuation.
+
+    The suffix must contain only punctuation/numbers (book publication details),
+    so a journal embedded after unknown prose is not mistaken for a title.
+    """
+    match = re.search(r'\\emph\s*(?=\{)', block)
+    if match is None:
+        return None
+    prefix = block[:match.start()].strip()
+    if not prefix.endswith(','):
+        return None
+    author = prefix[:-1].strip()
+    if not _usable_explicit_bibitem_author(author):
+        return None
+    names = _authors_from_bibitem(author)
+    if not all(re.search(r'(?<![A-Za-z])[A-Z]\.', name) and len(name.split()) >= 2 for name in names):
+        return None
+    try:
+        title, end = _read_braced(block, match.end())
+    except ValueError:
+        return None
+    if not title.strip() or len(title) > 1000 or not re.fullmatch(r'[\s\d,.;]*', block[end:]):
+        return None
+    return {'title': _collapse(title), 'author': author}
+
+
+_DATE_SUFFIX = (r'(?:[a-z]|\{?\\natexlab\s*(?:\{[a-z]\}|[a-z])\}?)?')
+_AUTHOR_BLOCK_DATE = re.compile(r'\.\s*(?P<year>(?:19|20)\d{2})' + _DATE_SUFFIX + r'[.,]?\s*$', re.I)
+_TITLE_BLOCK_DATE = re.compile(
+    r',\s*(?:(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
+    r'Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s*)?'
+    r'(?P<year>(?:19|20)\d{2})' + _DATE_SUFFIX + r'[.,]?\s*$', re.I)
+_NUMERIC_TITLE_DATE = re.compile(r',\s*(?:0?[1-9]|1[0-2])\s+(?P<year>(?:19|20)\d{2})'
+                                  + _DATE_SUFFIX + r'[.,]?\s*$', re.I)
+_TITLE_VOLUME = re.compile(r',\s*(?:volume|vol\.)\s*~?\s*(?P<volume>\d+)'
+                           r'(?:\s+of\s+(?P<series>.+?))?[.]?\s*$', re.I)
+_TITLE_PAGES = re.compile(r',\s*(?:pages?|pp?\.)\s+(?P<pages>\d{1,6}\s*(?:-{1,3}|[\u2013\u2014])\s*\d{1,6})[.]?\s*$', re.I)
+
+
+def _label_publication_year(label: str | None) -> str | None:
+    """Read author-year label syntax, never an arbitrary number in a label."""
+    if not label:
+        return None
+    marker = re.search(r'\\citeauthoryear(?![A-Za-z@])', label)
+    if marker:
+        values, pos = [], marker.end()
+        for _ in range(3):
+            pos = _skip_ws(label, pos)
+            if pos >= len(label) or label[pos] != '{':
+                break
+            try:
+                value, pos = _read_braced(label, pos)
+            except ValueError:
+                return None
+            values.append(value)
+        if len(values) in (2, 3):
+            date = re.fullmatch(r'((?:19|20)\d{2})' + _DATE_SUFFIX, values[-1].strip(), re.I)
+            if date:
+                return date[1]
+    years = []
+    pattern = re.compile(r'\(((?:19|20)\d{2})' + _DATE_SUFFIX + r'\)', re.I)
+    for match in pattern.finditer(label):
+        if any(c.isalpha() for c in clean_text(label[:match.start()])):
+            years.append(match[1])
+    return years[0] if years and len(set(years)) == 1 else None
+
+
+def _explicit_bibinfo_fields(body: str) -> tuple[dict[str, str], list[str]] | None:
+    """Read REVTeX's labeled fields without inferring absent title or dates.
+
+    A note is consumed as one bounded group, so nested values or erratum years
+    inside it cannot override the reference's explicit publication year.
+    """
+    marker = re.compile(r'\\bibinfo(?![A-Za-z@])')
+    if marker.search(body) is None:
+        return None
+    fields, warnings, authors, pos = {}, [], [], 0
+    author_spans = []
+    for container in re.finditer(r'\\bibfield(?![A-Za-z@])', body):
+        try:
+            kind, end = _read_braced(body, _skip_ws(body, container.end()))
+            start = _skip_ws(body, end)
+            _, end = _read_braced(body, start)
+            if kind.strip().lower() == 'author':
+                author_spans.append((start, end))
+        except ValueError:
+            continue
+    supported = {'title', 'year', 'journal', 'booktitle', 'doi', 'url', 'note',
+                 'pages', 'volume', 'number', 'publisher', 'edition', 'eprint', 'collaboration',
+                 'organization', 'date', 'howpublished', 'address', 'series', 'type',
+                 'institution', 'school', 'isbn', 'issn', 'chapter', 'editor', 'numpages', 'eid'}
+    while match := marker.search(body, pos):
+        try:
+            start = _skip_ws(body, match.end())
+            if start >= len(body) or body[start] != '{':
+                raise ValueError('missing field group')
+            name, end = _read_braced(body, start)
+            start = _skip_ws(body, end)
+            if start >= len(body) or body[start] != '{':
+                raise ValueError('missing value group')
+            value, pos = _read_braced(body, start)
+        except ValueError as exc:
+            warnings.append(f'BIBITEM_BIBINFO_MALFORMED: {exc}')
+            pos = match.end()
+            continue
+        name = name.strip().lower()
+        if name == 'author' or (name == 'person' and any(start <= match.start() < end for start, end in author_spans)):
+            authors.append(value)
+            continue
+        if name not in supported:
+            warnings.append(f'BIBITEM_BIBINFO_UNSUPPORTED_FIELD: {name}')
+            continue
+        if name in fields and fields[name] != value:
+            warnings.append(f'BIBITEM_BIBINFO_CONFLICT field={name}: first kept')
+            continue
+        fields[name] = value
+    if authors:
+        fields['author'] = ' and '.join(authors)
+    if fields.get('date'):
+        source_date = fields.pop('date').strip()
+        fields['date_raw'] = source_date
+        date_year = None
+        if re.fullmatch(r'\d{4}', source_date) and int(source_date) > 0:
+            date_year = int(source_date)
+        elif re.fullmatch(r'\d{4}-\d{2}-\d{2}', source_date):
+            try:
+                date_year = calendar_date.fromisoformat(source_date).year
+            except ValueError:
+                warnings.append('BIBITEM_BIBINFO_DATE_UNRESOLVED: invalid ISO date')
+        elif re.search(r'\d{4}', source_date):
+            warnings.append('BIBITEM_BIBINFO_DATE_UNRESOLVED: unsupported date syntax')
+        if date_year is not None:
+            fields['date'] = source_date
+            if not fields.get('year'):
+                fields['year'] = date_year
+    fields['parse_mode'] = 'bibinfo_fields'
+    if fields.get('year'):
+        fields['year_source'] = 'explicit_bibinfo'
+    return fields, warnings
+
+
+def _single_macro_block(block: str) -> tuple[str, str] | None:
+    """Recognize a whole one-argument macro block, not prose containing one."""
+    match = re.match(r'\s*\\([A-Za-z@]+)\s*(?=\{)', block)
+    if match is None:
+        return None
+    try:
+        value, end = _read_braced(block, match.end())
+    except ValueError:
+        return None
+    if block[end:].strip(' \t\r\n.,;'):
+        return None
+    return match[1], value
+
+
+def _validated_author_year_prefix(body: str, year: str) -> tuple[str, str] | None:
+    """Read an explicit surname/initial-pair list ending at its label date.
+
+    Every pair must validate; this does not recover full names from initials or
+    interpret a free-form prose prefix as people.
+    """
+    date = re.search(r'(?<![\d.])' + re.escape(year) + _DATE_SUFFIX + r'(?=\s*[,.;])', body)
+    if date is None:
+        return None
+    raw = body[:date.start()].strip()
+    cleaned, unknown = _bibitem_author_text(raw)
+    if unknown:
+        return None
+    parts = _split_depth0(cleaned, _COMMA)
+    truncated = bool(parts and re.fullmatch(r'et\s*al\.?', clean_text(parts[-1]), re.I))
+    if truncated:
+        parts.pop()
+    if not parts or len(parts) % 2:
+        return None
+    people = []
+    for idx in range(0, len(parts), 2):
+        family = re.sub(r'^(?:and\s+|&\s*)', '', clean_text(parts[idx]), flags=re.I)
+        initials = clean_text(parts[idx + 1])
+        if (not family or any(c.isdigit() for c in family)
+                or not any(c.isalpha() for c in family) or not _INITIALS.fullmatch(initials)):
+            return None
+        people.append(initials + ' ' + family)
+    if truncated:
+        people.append('et al.')
+    return ' and '.join(people), raw
 
 
 def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
     fields: dict[str, str] = {"raw": _collapse(body)}
+    # These style switches change spacing, not author/reference identity. Keep
+    # the untouched body above for provenance; parse only the cleaned copy.
+    body = _BIB_SPACING.sub('', body)
     if label is not None:
         fields["label"] = _collapse(label)
 
@@ -357,26 +684,224 @@ def _bibitem_fields(body: str, label: str | None) -> dict[str, str]:
     years = _YEAR.findall(cleaned)
     if years:
         fields["year"] = years[-1]
+    label_year = _label_publication_year(label)
+    if label_year:
+        fields['year'] = label_year
+        fields['year_source'] = 'author_year_label'
+
+    explicit = _explicit_bibinfo_fields(body)
+    if explicit is not None:
+        parsed, issues = explicit
+        if not label_year:
+            fields.pop('year', None)  # an absent explicit year is not the note's year
+        fields.update(parsed)
+        if issues:
+            fields['bibinfo_parse_warnings'] = issues
+        return fields
 
     blocks = [_collapse(b) for b in _NEWBLOCK.split(body)]
     blocks = [b for b in blocks if b]
     if len(blocks) >= 2:
+        quote_only = _QUOTED_TITLE.match(blocks[0])
+        if quote_only and re.fullmatch(r'\s*,?\s*((?:19|20)\d{2})[.,]?\s*', blocks[0][quote_only.end():]):
+            fields['title'] = _collapse(quote_only[1]).strip(' ,.;')
+            fields['parse_mode'] = 'quoted_title_only_first_block'
+            first_years = _YEAR.findall(blocks[0][quote_only.end():])
+            fields['year'] = first_years[-1]
+            fields['year_source'] = 'first_block_bibliography_date'
+            fields['continuation_raw'] = ' '.join(blocks[1:])
+            return fields
+        quoted_first = _quoted_title_fields(blocks[0])
+        if quoted_first and _usable_explicit_bibitem_author(quoted_first['author']):
+            fields.update(quoted_first)
+            fields['parse_mode'] = 'quoted_first_block'
+            # Received/accepted years and notes in subsequent newblocks are
+            # not publication dates of this already complete reference block.
+            first = _ARXIV.sub(' ', _DOI.sub(' ', _URL.sub(' ', blocks[0])))
+            first_years = _YEAR.findall(_PAGES.sub(' ', first))
+            if first_years:
+                fields['year'] = first_years[-1]
+                fields['year_source'] = 'first_block_bibliography_date'
+            elif not label_year:
+                fields.pop('year', None)
+            fields['continuation_raw'] = ' '.join(blocks[1:])
+            return fields
+        emphasized_first = _emphasized_first_block_fields(blocks[0])
+        if emphasized_first:
+            fields.update(emphasized_first)
+            fields['parse_mode'] = 'emphasized_first_block'
+            fields['continuation_raw'] = ' '.join(blocks[1:])
+            return fields
+        if len(blocks) == 2 and re.match(r'In\s*\\(?:emph|textit)(?![A-Za-z@])', blocks[1], re.I):
+            # No separate title/author block can be identified in this layout;
+            # do not mistake the whole work title for a list of people.
+            fields['parse_mode'] = 'raw_only'
+            return fields
+        macro = _single_macro_block(_unwrap_links(blocks[1]))
+        if macro and macro[0] not in ('emph', 'textit', 'textbf'):
+            fields['parse_mode'] = 'raw_only'
+            fields['omitted_title_identifier'] = macro[0]
+            if macro[0].casefold() == 'doarxiv' and re.fullmatch(r'\d{4}\.\d{4,5}(?:v\d+)?', macro[1]):
+                fields['eprint'] = macro[1]
+            elif macro[0] == 'path' and _DOI.search(macro[1]):
+                pass  # DOI was already extracted from the literal source above
+            elif macro[0] not in ('url', 'dodoi'):
+                fields['bibinfo_parse_warnings'] = [f'BIBITEM_TITLE_MACRO_UNSUPPORTED: {macro[0]}']
+            return fields
         fields["parse_mode"] = "newblock"
+        author_date = _AUTHOR_BLOCK_DATE.search(blocks[0])
+        if author_date:
+            fields['year'] = author_date['year']
+            fields['year_source'] = 'newblock_author_date'
+        elif len(blocks) >= 3:
+            # Prefer a bibliographic venue date to a year in the title or an
+            # arXiv display identifier elsewhere in the entry.
+            venue_block = _ARXIV.sub(' ', _DOI.sub(' ', _URL.sub(' ', blocks[2])))
+            venue_block = _PAGES.sub(' ', venue_block)
+            parenthesized = re.search(r'\(((?:19|20)\d{2})\)', venue_block)
+            venue_years = _YEAR.findall(venue_block)
+            if parenthesized or venue_years:
+                fields['year'] = parenthesized[1] if parenthesized else venue_years[-1]
+                fields['year_source'] = 'newblock_venue_date'
         fields["author"] = blocks[0]
+        if fields.get('year'):
+            author_without_year, removed_year = re.subn(r'(?<=[\s.])' + re.escape(fields['year'])
+                                                        + _DATE_SUFFIX + r'[.,]?\s*$', '', fields['author'])
+            author_without_year = author_without_year.rstrip()
+            if removed_year and author_without_year:
+                fields['author_raw'] = fields['author']
+                fields['author'] = author_without_year
         fields["title"] = blocks[1]
+        title_pages = _TITLE_PAGES.search(fields['title'])
+        if title_pages and fields['title'][:title_pages.start()].strip():
+            fields['title_raw'] = fields['title']
+            fields['title_pages_raw'] = fields['title'][title_pages.start():]
+            fields['pages'] = title_pages['pages']
+            fields['title'] = fields['title'][:title_pages.start()].rstrip()
+        title_volume = _TITLE_VOLUME.search(fields['title'])
+        if title_volume and fields['title'][:title_volume.start()].strip():
+            fields['title_raw'] = fields['title']
+            fields['title_volume_raw'] = fields['title'][title_volume.start():]
+            fields['volume'] = title_volume['volume']
+            if title_volume['series']:
+                fields['series'] = title_volume['series'].rstrip(' .')
+            fields['title'] = fields['title'][:title_volume.start()].rstrip()
+        title_date = _TITLE_BLOCK_DATE.search(fields['title']) or _NUMERIC_TITLE_DATE.search(fields['title'])
+        if title_date and title_date['year'] == fields.get('year'):
+            title_without_date = fields['title'][:title_date.start()].rstrip()
+            if title_without_date:
+                fields.setdefault('title_raw', fields['title'])
+                fields['title_date_raw'] = fields['title'][title_date.start():]
+                fields['title'] = title_without_date
         if len(blocks) >= 3:
             if _VENUE_HINT.search(blocks[2]):
-                fields["booktitle"] = _venue_text(blocks[2])
+                fields["booktitle"] = _bibitem_venue(blocks[2])
             else:
-                fields["journal"] = blocks[2]
+                fields["journal"] = _bibitem_venue(blocks[2])
     else:
         quoted = _quoted_title_fields(body)
         if quoted:
             fields.update(quoted)
             fields["parse_mode"] = "quoted"
         else:
-            fields["parse_mode"] = "raw_only"
+            emphasized = _emphasized_title_fields(body)
+            if emphasized:
+                fields.update(emphasized)
+                fields['parse_mode'] = 'emphasized_title'
+            else:
+                fields["parse_mode"] = "raw_only"
+    if fields['parse_mode'] == 'raw_only' and label_year:
+        explicit_authors = _validated_author_year_prefix(body, label_year)
+        if explicit_authors:
+            fields['author'], fields['author_raw'] = explicit_authors
+            fields['author_source'] = 'validated_author_year_prefix'
+    if fields['parse_mode'] == 'raw_only' and not fields.get('year_source'):
+        venue_year = _emphasized_venue_year(body)
+        if venue_year:
+            fields['year'] = venue_year
+            fields['year_source'] = 'emphasized_venue_date'
+        elif len(set(years)) > 1:
+            fields.pop('year', None)
+            fields['year_raw'] = ' | '.join(dict.fromkeys(years))
+            fields['bibinfo_parse_warnings'] = ['BIBITEM_YEAR_UNRESOLVED: multiple unscoped year-like numbers']
     return fields
+
+
+def _bibitem_author_text(author: str) -> tuple[str, list[str]]:
+    """Unwrap only known author formatting, preserving unknown macro literals."""
+    author = _BIB_SPACING.sub('', author)
+    smallcaps = re.match(r'\s*\{\s*\\(?:sc|scshape)\s+', author)
+    if smallcaps:
+        try:
+            wrapped, end = _read_braced(author, author.index('{'))
+            if not author[end:].strip(' .\t\r\n'):
+                unwrapped = re.sub(r'^\s*\\(?:sc|scshape)\s+', '', wrapped)
+                pieces = _split_depth0(unwrapped, _COMMA)
+                valid = bool(pieces) and len(pieces) % 2 == 0
+                for idx in range(0, len(pieces) - 1, 2):
+                    family = re.sub(r'^and\s+', '', clean_text(pieces[idx]), flags=re.I)
+                    valid = valid and any(c.isalpha() for c in family) and bool(_INITIALS.fullmatch(clean_text(pieces[idx + 1])))
+                if valid:
+                    author = unwrapped
+        except ValueError:
+            pass
+    author = _AUTHOR_WRAPPER.sub('', author)
+    author = re.sub(r'\\textquoteright(?![A-Za-z@])(?:\{\})?', "'", author)
+    def same_literal_letter(match):
+        math, text = match['math'].strip(), match['text'].strip().lstrip('~').strip()
+        if math == r'\imath' and re.fullmatch(r'\\i(?:\{\})?', text):
+            return r'\i{}'
+        boxed = _single_macro_block(math)
+        if boxed and boxed[0] == 'mbox' and re.fullmatch(r'\\c\s*\{[A-Za-z]\}', text):
+            if clean_text(boxed[1]) == clean_text(text):
+                return text
+        breve = re.fullmatch(r'\\breve\s*\{([A-Za-z])\}', math)
+        if breve and (len(text) == 1 or re.fullmatch(r'\\u\s*\{[A-Za-z]\}', text)):
+            literal = unicodedata.normalize('NFC', breve[1] + '\u0306')
+            if literal == clean_text(text):
+                return text
+        return match.group()
+    author = re.sub(r'\\ifmmode(?P<math>.*?)\\else(?P<text>.*?)\\fi(?:\{\})?',
+                    same_literal_letter, author, flags=re.S)
+    author = re.sub(r'\\(?:\s|[,;!])', ' ', author)
+    author = re.sub(r'\\biband(?![A-Za-z@])', ' and ', author)
+    pos = 0
+    marker = re.compile(r'\\bibinfo(?![A-Za-z@])')
+    while match := marker.search(author, pos):
+        try:
+            field_start = _skip_ws(author, match.end())
+            if field_start >= len(author) or author[field_start] != '{':
+                break
+            field, end = _read_braced(author, field_start)
+            payload_start = _skip_ws(author, end)
+            if payload_start >= len(author) or author[payload_start] != '{':
+                break
+            payload, end = _read_braced(author, payload_start)
+            if field.strip().lower() not in ('author', 'editor'):
+                pos = end
+                continue
+            author = author[:match.start()] + payload + author[end:]
+            pos = match.start()
+        except ValueError:
+            break
+    plain = clean_text(author)
+    unknown = sorted(set(re.findall(r'\\[A-Za-z@]+', plain)))
+    return author, unknown
+
+
+def _usable_explicit_bibitem_author(author: str) -> bool:
+    """Exclude unresolved macros, broken groups and non-name placeholders."""
+    author, unknown = _bibitem_author_text(author)
+    if unknown or _REPEATED_AUTHOR.fullmatch(author):
+        return False
+    try:
+        _, end = _read_braced('{' + author + '}', 0)
+        if end != len(author) + 2:
+            return False
+    except ValueError:
+        return False
+    names = _authors_from_bibitem(author)
+    return bool(names) and all(any(c.isalpha() for c in name) for name in names)
 
 
 def _read_label(text: str, i: int) -> tuple[str, int] | None:
@@ -423,16 +948,24 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
     text = _strip_comments(text)
     heads: list[tuple[int, int, str | None, str]] = []
     warnings: list[str] = []
+    malformed_heads = []
     for m in _BIBITEM_CMD.finditer(text):
         head = _bibitem_head(text, m)
         if head is None:
             warnings.append(f"malformed \\bibitem at offset {m.start()}; skipped")
+            malformed_heads.append(m.start())
             continue
         label, key, body_start = head
         heads.append((m.start(), body_start, label, key))
 
     entries: list[BibEntry] = []
-    for idx, (_, body_start, label, key) in enumerate(heads):
+    previous_author = None
+    previous_explicit_key = None
+    previous_start = 0
+    for idx, (head_start, body_start, label, key) in enumerate(heads):
+        if (_BIB_CONTEXT.search(text[previous_start:head_start])
+                or any(previous_start <= offset < head_start for offset in malformed_heads)):
+            previous_author = previous_explicit_key = None
         end = heads[idx + 1][0] if idx + 1 < len(heads) else len(text)
         body = text[body_start:end]
         stop = _END_BIB.search(body)
@@ -440,33 +973,224 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
             body = body[:stop.start()]
         if not key:
             warnings.append(f"\\bibitem #{idx + 1} has an empty key; skipped")
+            previous_author = previous_explicit_key = None
+            previous_start = body_start
             continue
+        fields = _bibitem_fields(body, label)
+        warnings.extend(f'{message} key={key}' for message in fields.pop('bibinfo_parse_warnings', []))
+        author = fields.get('author', '')
+        if not author:
+            repeated = _REPEATED_PREFIX.match(_BIB_SPACING.sub('', body))
+            if repeated:
+                author = repeated.group()
+        if _REPEATED_AUTHOR.fullmatch(author):
+            if previous_author:
+                fields['author'] = previous_author
+                fields['author_repeated_from'] = previous_explicit_key
+            else:
+                fields.pop('author', None)
+                warnings.append(f'BIBITEM_REPEATED_AUTHOR_UNRESOLVED key={key}: no preceding explicit author in bibliography')
+        else:
+            cleaned_author, unknown = _bibitem_author_text(author)
+            if unknown:
+                warnings.append(f'BIBITEM_AUTHOR_MACRO_UNSUPPORTED key={key}: ' + ', '.join(unknown))
+            elif len(_split_depth0(cleaned_author, re.compile(';'))) > 1 and not _authors_from_bibitem(cleaned_author):
+                warnings.append(f'BIBITEM_AUTHOR_STYLE_UNSUPPORTED key={key}: malformed semicolon name list')
+            if author:
+                fields['author'] = cleaned_author
+            if _usable_explicit_bibitem_author(cleaned_author):
+                previous_author, previous_explicit_key = cleaned_author, key
+            else:
+                previous_author = previous_explicit_key = None
         entries.append(BibEntry(original_key=key, entry_type="misc",
-                                fields=_bibitem_fields(body, label)))
+                                fields=fields))
+        previous_start = body_start
     return entries, warnings
 
 
-def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibEntry], list[str]]:
+def _compatible_bbl_authors(previous: BibEntry, fallback: BibEntry) -> bool:
+    """Accept formatted initials only with independent strong work identity.
+
+    This never replaces native authors with abbreviated names. Token count and
+    order stay strict; only an explicitly truncated fallback may match a prefix.
+    """
+    left, right = previous.fields, fallback.fields
+    same_doi = bool(_identity_doi(left) and _identity_doi(left) == _identity_doi(right))
+    matching_title = bool(left.get('title') and right.get('title')
+                          and _alnum(left['title']) == _alnum(right['title']))
+    same_title_year = bool(matching_title and left.get('year') is not None
+                           and left.get('year') == right.get('year'))
+    long_title_missing_year = bool(matching_title and len(_title_tokens(left['title'])) >= 5
+        and (left.get('year') is None or right.get('year') is None))
+    a_id, b_id = _identity_arxiv(left), _identity_arxiv(right)
+    same_arxiv = bool(a_id and a_id == b_id)
+    if not (same_doi or same_arxiv or same_title_year or long_title_missing_year):
+        return False
+    native, printed = left.get('authors', []), right.get('authors', [])
+    if not native or not printed:
+        return False
+    if len(native) != len(printed):
+        if not right.get('authors_truncated') or len(printed) > len(native):
+            return False
+    for full, abbreviated in zip(native, printed):
+        # Apostrophes inside a name are not an extra given-name component:
+        # Shin'ichiro -> S., O'Sullivan stays one family-name token.
+        token = r"[^\W_]+(?:['\u2019][^\W_]+)*"
+        a = [_author_key(x) for x in re.findall(token, _fold(full), flags=re.UNICODE)]
+        b = [_author_key(x) for x in re.findall(token, _fold(abbreviated), flags=re.UNICODE)]
+        if not a or not b or a[-1] != b[-1] or len(a) != len(b):
+            return False
+        for x, y in zip(a[:-1], b[:-1]):
+            if x != y and not (len(x) == 1 and y.startswith(x)) and not (len(y) == 1 and x.startswith(y)):
+                return False
+    return True
+
+
+def _identifier_url(value: object) -> tuple[str, str] | None:
+    """Recognize identifier links by their actual host, not a substring."""
+    try:
+        url = urlsplit(str(value or ''))
+    except ValueError:
+        return None
+    if url.scheme.lower() not in {'http', 'https'}:
+        return None
+    path = unquote(url.path).strip('/')
+    if url.hostname in {'doi.org', 'dx.doi.org', 'www.doi.org'} and path.startswith('10.'):
+        return ('doi', path.casefold())
+    if url.hostname in {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}:
+        match = re.fullmatch(r'(?:abs|pdf)/(.+?)(?:\.pdf)?', path, re.I)
+        if match and _ARXIV_ID.fullmatch(match[1]):
+            return ('arxiv', re.sub(r'v\d+$', '', match[1], flags=re.I).casefold())
+    return None
+
+
+def _identity_doi(fields: dict) -> str | None:
+    return fields.get('doi') if fields.get('doi_source') != 'note' else None
+
+
+def _identity_arxiv(fields: dict) -> str | None:
+    explicit = re.sub(r'^arxiv\s*:\s*', '', str(fields.get('eprint') or '').strip(), flags=re.I)
+    if _ARXIV_ID.fullmatch(explicit):
+        return re.sub(r'v\d+$', '', explicit, flags=re.I).casefold()
+    identifier = _identifier_url(fields.get('url'))
+    if identifier and identifier[0] == 'arxiv':
+        return identifier[1]
+    # A literal arXiv: identifier in the journal metadata is explicit evidence,
+    # unlike an arbitrary host containing the substring 'arxiv.org'.
+    literal = _ARXIV.search(str(fields.get('journal') or ''))
+    return literal[1].casefold() if literal else None
+
+
+def _author_key(value: str) -> str:
+    return ''.join(c for c in _fold(value) if c.isalnum())
+
+
+def _entry_identity(left: BibEntry, right: BibEntry) -> str | None:
+    a, b = left.fields, right.fields
+    a_doi, b_doi = _identity_doi(a), _identity_doi(b)
+    if a_doi and b_doi:
+        if a_doi != b_doi:
+            return None
+        return 'doi'
+    a_id, b_id = _identity_arxiv(a), _identity_arxiv(b)
+    if a_id and b_id:
+        return 'arxiv_id' if a_id == b_id else None
+    same_title_year = bool(a.get('title') and b.get('title')
+        and len(_title_tokens(a['title'])) >= 3
+        and _alnum(a['title']) == _alnum(b['title'])
+        and a.get('year') is not None and a['year'] == b.get('year'))
+    authors_match = bool(a.get('authors') and b.get('authors') and (
+        [_author_key(x) for x in a['authors']] == [_author_key(x) for x in b['authors']]
+        or _compatible_bbl_authors(left, right)))
+    return 'title_year_authors' if same_title_year and authors_match else None
+
+
+def _compare_entries(previous: BibEntry, fallback: BibEntry) -> dict:
+    """Field decisions for one source-local citation key; never overwrite native values."""
+    identity = _entry_identity(previous, fallback)
+    conflicts, equivalents, alternates = [], [], []
+    a, b = previous.fields, fallback.fields
+    for name in _CANON_FIELDS:
+        left, right = a.get(name), b.get(name)
+        if not left or not right:
+            continue
+        if name in {'title', 'journal'}:
+            same = _alnum(left) == _alnum(right)
+        elif name == 'authors':
+            same = ([_author_key(x) for x in left] == [_author_key(x) for x in right]
+                    or _compatible_bbl_authors(previous, fallback))
+        elif name == 'url':
+            same = left == right
+            l_id, r_id = _identifier_url(left), _identifier_url(right)
+            if not same and l_id and l_id == r_id:
+                same = True
+                if left != right:
+                    alternates.append(right)
+            # A DOI landing page and a publisher/repository page can both be
+            # source-provided links for the same explicit DOI. Preserve both;
+            # never generalize this to unrelated/contradictory identifier URLs.
+            contradictory = bool(l_id and r_id and l_id[0] == r_id[0] and l_id != r_id)
+            doi_link = ('doi', str(a.get('doi', '')).casefold())
+            if not same and identity == 'doi' and not contradictory and doi_link in (l_id, r_id):
+                try:
+                    valid = all(urlsplit(v).scheme in {'http', 'https'} and urlsplit(v).hostname
+                                for v in (left, right))
+                except ValueError:
+                    valid = False
+                if valid:
+                    same = True
+                    alternates.append(right)
+        else:
+            same = left == right
+        (equivalents if same else conflicts).append(name)
+    # Conflicting explicit identifiers veto even otherwise plausible enrichment.
+    a_doi, b_doi = _identity_doi(a), _identity_doi(b)
+    identifiers_conflict = bool(a_doi and b_doi and a_doi != b_doi)
+    a_id, b_id = _identity_arxiv(a), _identity_arxiv(b)
+    identifiers_conflict |= bool(a_id and b_id and a_id != b_id)
+    if a_id and b_id and a_id != b_id:
+        conflicts.append('arxiv_id')
+    if identifiers_conflict:
+        identity = None
+    allowed = not conflicts or bool(identity)
+    if identifiers_conflict:
+        allowed = False
+    fills = [name for name in _CANON_FIELDS if not a.get(name) and b.get(name)] if allowed else []
+    return dict(identity=identity, conflicting_fields=conflicts, equivalent_fields=equivalents,
+                filled_fields=fills, alternative_urls=alternates, allow_enrichment=allowed,
+                native_identifiers={'doi': a_doi, 'arxiv_id': a_id},
+                fallback_identifiers={'doi': b_doi, 'arxiv_id': b_id})
+
+
+def extract_bibliography_detailed(document: GatheredDocument, *,
+                                  conflict_sink: list[dict] | None = None) -> tuple[list[BibEntry], list[str]]:
     """Extract raw entries of one version: .bib, then .bbl, then inline \\bibitem."""
     tag = f"[{document.arxiv_id} v{document.version}]"
     sources: list[tuple[str, list[BibEntry], list[str]]] = []
-    paths = sorted(document.bib_files)
-    for path in [p for p in paths if not p.lower().endswith(".bbl")]:
+    # Native databases precede derived BBL conversions, regardless of basename.
+    paths = sorted(document.bib_files, key=lambda p: (p.lower().endswith('.bbl.bib'), p))
+    for path in [p for p in paths if not p.lower().endswith((".bbl", ".bbl.tex"))]:
         sources.append((path, *parse_bib(document.bib_files[path])))
-    for path in [p for p in paths if p.lower().endswith(".bbl")]:
+    for path in [p for p in paths if p.lower().endswith((".bbl", ".bbl.tex"))]:
         raw = document.bib_files[path]
-        if re.search(r"\\entry(?![A-Za-z@])", raw):
+        if is_biblatex_bbl(raw):
             parsed, warns = parse_biblatex_bbl(raw)
+        elif is_amsrefs_bbl(raw):
+            parsed, warns = parse_amsrefs_bbl(raw)
         else:
             parsed, warns = parse_bibitems(raw)
-        if not parsed and raw.strip() and not warns:
+        if not parsed and raw.strip() and not warns and not is_empty_bibliography(raw):
             warns.append("BBL_NO_BIBITEM: unsupported or empty bibliography format")
         sources.append((path, parsed, warns))
     sources.append(("<latex>", *parse_bibitems(document.latex)))
+    if is_amsrefs_bbl(document.latex):
+        sources.append(("<latex>", *parse_amsrefs_bbl(document.latex)))
 
     entries: list[BibEntry] = []
     diagnostics: list[str] = []
     seen: set[str] = set()
+    by_key: dict[str, int] = {}
+    origins: dict[str, str] = {}
     for path, parsed, warns in sources:
         for w in warns:
             log.warning("%s stage=bib_parse file=%s: %s", tag, path, w)
@@ -474,12 +1198,50 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
         for e in parsed:
             fold = e.original_key.casefold()  # BibTeX keys are case-insensitive
             if fold and fold in seen:
-                log.warning("%s stage=bib_parse file=%s: duplicate key '%s' "
-                            "skipped (first kept)", tag, path, e.original_key)
-                diagnostics.append(f'{tag} stage=bib_parse file={path}: duplicate key {e.original_key!r} skipped')
+                conflicts = []
+                decision = None
+                if (path.lower().endswith(('.bbl', '.bbl.bib', '.bbl.tex')) or path == '<latex>'):
+                    previous = normalize_entry(entries[by_key[fold]])
+                    fallback = normalize_entry(e)
+                    decision = _compare_entries(previous, fallback)
+                    conflicts = decision['conflicting_fields']
+                    if conflict_sink is not None:
+                        conflict_sink.append(dict(arxiv_id=document.arxiv_id, version=document.version,
+                            citation_key=e.original_key, native_source=origins[fold],
+                            fallback_source=path, **decision,
+                            native={name: previous.fields.get(name) for name in _CANON_FIELDS},
+                            fallback={name: fallback.fields.get(name) for name in _CANON_FIELDS},
+                            fallback_parse_mode=fallback.fields.get('parse_mode'),
+                            fallback_raw=fallback.fields.get('raw')))
+                    if decision['allow_enrichment']:
+                        merged = dict(previous.fields)
+                        for name, value in fallback.fields.items():
+                            # These identify the bibitem parser's input format;
+                            # copying them would reinterpret an existing BibTeX
+                            # author/title during the final normalization pass.
+                            if name in ('raw', 'label', 'parse_mode', 'author'):
+                                continue
+                            if name == 'authors_truncated' and previous.fields.get('authors'):
+                                continue
+                            if not merged.get(name) and value:
+                                merged[name] = value
+                        entries[by_key[fold]] = BibEntry(previous.original_key, previous.entry_type, merged)
+                        if decision['alternative_urls']:
+                            merged['alternative_urls'] = list(dict.fromkeys(
+                                list(previous.fields.get('alternative_urls', [])) + decision['alternative_urls']))
+                        if not conflicts:
+                            continue
+                action = ('native values kept; missing fields enriched'
+                          if decision and decision['allow_enrichment'] else 'skipped (first kept)')
+                log.warning("%s stage=bib_parse file=%s: duplicate key '%s' %s; conflicts=%s",
+                            tag, path, e.original_key, action, ','.join(conflicts))
+                diagnostics.append(f'{tag} stage=bib_parse file={path}: duplicate key {e.original_key!r} {action}'
+                                   + (f'; conflicting_fields={",".join(conflicts)}' if conflicts else ''))
                 continue
             if fold:
                 seen.add(fold)
+                by_key[fold] = len(entries)
+                origins[fold] = path
             entries.append(e)
     entries, crossref_warnings = resolve_crossrefs(entries)
     for warning in crossref_warnings:
@@ -493,13 +1255,15 @@ def extract_bibliography(document: GatheredDocument) -> list[BibEntry]:
     return extract_bibliography_detailed(document)[0]
 
 
-_CITED = re.compile(r'\\[A-Za-z]*[Cc]ite[A-Za-z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^{}]*)\}')
+_CITED = re.compile(r'\\(?P<command>[A-Za-z]*[Cc]ite[A-Za-z]*)\*?\s*(?:\[[^\]]*\]\s*){0,2}\{(?P<keys>[^{}]*)\}')
 
 
 def cited_keys(text: str) -> set[str]:
     """Citation keys as written; no guessing or DOI/S2 lookup."""
     return {key.strip() for match in _CITED.finditer(text)
-            for key in match[1].split(',') if key.strip()}
+            if match['command'].casefold() != 'bstctlcite'
+            for key in match['keys'].split(',') if key.strip()
+            and not (match['command'].casefold() == 'nocite' and key.strip() == '*')}
 
 
 def build_key_resolver(mapping: dict[str, str]) -> Callable[[str], str | None]:
@@ -561,10 +1325,12 @@ def clean_text(s: object) -> str:
     if s is None:
         return ""
     out = []
-    for idx, part in enumerate(_MATH_SPLIT.split(str(s))):
+    for idx, part in enumerate(_MATH_SPLIT.split(_unwrap_links(str(s)))):
         if idx % 2 == 1:
             out.append(part)
             continue
+        part = _unwrap_links(part)
+        part = re.sub(r'\\penalty\s*-?\d+\s*', '', part)
         part = _ACC_SYM.sub(_accent_sub, part)
         part = _ACC_LET.sub(_accent_sub, part)
         part = _SPECIAL_RE.sub(lambda m: _SPECIAL[m.group(1)], part)
@@ -615,6 +1381,11 @@ def _format_name(name: str) -> str | None:
 
 
 def _authors_from_bibtex(s: str) -> list[str]:
+    # Apply only proven literal formatting before generic brace cleanup would
+    # collapse command boundaries (textquoteright{}Sullivan -> ...Sullivan).
+    # Unknown/differing conditional branches remain literal, never guessed.
+    if r'\ifmmode' in s or r'\textquoteright' in s:
+        s, _ = _bibitem_author_text(s)
     names = (_format_name(p) for p in _split_depth0(s, _AND))
     return [n for n in names if n]
 
@@ -629,10 +1400,12 @@ def _strip_et_al(authors: list[str]) -> tuple[list[str], bool]:
     truncated = False
     for a in authors:
         a = a.strip()
-        if a.casefold().rstrip(".") in {"others", "et al", "etal"}:
+        if a.casefold().rstrip(".") in {"others", "et al", "etal"} or re.fullmatch(r'\d+\s+others\.?', a, re.I):
             truncated = True
             continue
         m = _ET_AL.search(a)
+        if m is None:
+            m = re.search(r'[\s,]+\d+\s+others\.?$', a, re.I)
         if m:
             a = a[:m.start()].rstrip(" ,")
             truncated = True
@@ -642,8 +1415,30 @@ def _strip_et_al(authors: list[str]) -> tuple[list[str], bool]:
 
 
 def _authors_from_bibitem(s: str) -> list[str]:
+    s, unknown = _bibitem_author_text(s)
+    if unknown or _REPEATED_AUTHOR.fullmatch(s):
+        return []
     s = re.sub(r"(?<![A-Z])\.\s*$", "", s.strip())
     s = re.sub(r",\s+and\s+", " and ", s)
+    semicolon_parts = _split_depth0(s, re.compile(';'))
+    if len(semicolon_parts) > 1:
+        # AAAI-style lists explicitly separate family/initial pairs by ';'.
+        # Validate every pair before accepting the list; do not feed fragments
+        # containing semicolons through the generic comma splitter.
+        people = []
+        for segment in semicolon_parts:
+            segment = re.sub(r'^\s*and\s+', '', segment, flags=re.I)
+            if re.fullmatch(r'et\s*al\.?', clean_text(segment), re.I):
+                people.append('et al.')
+                continue
+            parts = _split_depth0(segment, _COMMA)
+            if len(parts) != 2 or not _INITIALS.fullmatch(clean_text(parts[1])):
+                return []
+            family = clean_text(parts[0])
+            if not any(c.isalpha() for c in family):
+                return []
+            people.append(clean_text(parts[1]) + ' ' + family)
+        return people
     result: list[str] = []
     for chunk in _split_depth0(s, _AND):
         plains = [clean_text(t) for t in _split_depth0(chunk, _COMMA)]
@@ -657,6 +1452,11 @@ def _authors_from_bibitem(s: str) -> list[str]:
             continue
         merged: list[str] = []
         for plain in plains:
+            et_al = _ET_AL.search(plain)
+            if merged and et_al and _INITIALS.fullmatch(plain[:et_al.start()].rstrip(' ,')):
+                merged[-1] = plain[:et_al.start()].rstrip(' ,') + ' ' + merged[-1]
+                merged.append('et al.')
+                continue
             if merged and _INITIALS.match(plain):
                 merged[-1] = f"{plain} {merged[-1]}"
             else:
@@ -699,7 +1499,11 @@ def _url(fields: dict) -> str | None:
     for esc, ch in ((r"\_", "_"), (r"\%", "%"), (r"\#", "#"), (r"\&", "&")):
         u = u.replace(esc, ch)
     m2 = re.search(r"(?:https?|ftp)://[^\s{}]+", u)
-    return m2.group(0).rstrip(".,;)") if m2 else None
+    if not m2:
+        return None
+    result = m2.group(0).rstrip(".,;)")
+    return re.sub(r'^https?://(?:dx\.)?doi\.org/(?:https?://(?:dx\.)?doi\.org/)+(?=10\.)',
+                  'https://doi.org/', result, flags=re.I)
 
 
 _JOURNAL_MACROS = {

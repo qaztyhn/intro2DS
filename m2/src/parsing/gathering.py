@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import posixpath
 import re
+import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from m1.src.schema import no_symlinks, relative_path, require_arxiv_id, require_version
+from m1.src.compilation import MAX_COMPILATION_BYTES, compilation_record
 from .contracts import GatheredDocument, SourceVersion
 
 MAX_FILE_BYTES = 64 * 2**20
@@ -25,7 +27,8 @@ COMMAND = re.compile(r'\\([A-Za-z@]+|[^\n])')
 SPECIAL = re.compile(r'[\\%]')
 CONDITIONAL_MACROS = {'ifthenelse': 3, 'ifdef': 3, 'ifboolexpr': 3,
                       'ifstrequal': 4, 'IfFileExists': 3, 'ifdraft': 2,
-                      'ifcsdef': 3, 'ifcsundef': 3}
+                      'ifcsdef': 3, 'ifcsundef': 3, 'ifdefempty': 3,
+                      'ifblank': 3, 'ifstrempty': 3, 'ifcsempty': 3}
 
 
 def is_conditional(name):
@@ -182,31 +185,69 @@ def conditional(text, end, non_conditionals=(), conditional_flags=()):
     return None
 
 
-def events(text, non_conditionals=None, conditional_flags=None):
+def events(text, non_conditionals=None, conditional_flags=None, flag_values=None, flag_scopes=None):
     """Yield nonoverlapping (start, end, kind, payload) lexical events."""
     index = 0
     ordinary = set() if non_conditionals is None else non_conditionals
     flags = set() if conditional_flags is None else conditional_flags
+    values = {} if flag_values is None else flag_values
+    scopes = [] if flag_scopes is None else flag_scopes
+    global_assignment = False
     while index < len(text):
-        if text[index] != '\\': index += 1; continue
+        if text[index] != '\\':
+            if text[index] == '{':
+                scopes.append(dict(values))
+            elif text[index] == '}' and scopes:
+                values.clear(); values.update(scopes.pop())
+            index += 1
+            continue
         start = index
         special = literal(text, start)
         if special: index = special[1]; continue
         name, end = command(text, start)
         index = end
+        if name == 'global':
+            global_assignment = True
+            continue
+        if name == 'begingroup':
+            scopes.append(dict(values))
+            continue
+        if name == 'endgroup':
+            if scopes:
+                values.clear(); values.update(scopes.pop())
+            continue
         if name == 'newif':
             target = spaces(text, end)
             if target < len(text) and text[target] == '\\':
                 flag, index = command(text, target)
                 flags.add(flag)
                 ordinary.discard(flag)
+                values[flag] = False
             continue
+        setter = ('if' + name[:-4], True) if name.endswith('true') else (
+            ('if' + name[:-5], False) if name.endswith('false') else None)
+        if setter and setter[0] in flags and name not in ordinary:
+            values[setter[0]] = setter[1]
+            if global_assignment:
+                for scope in scopes:
+                    scope[setter[0]] = setter[1]
+            global_assignment = False
+            continue
+        global_assignment = False
         if name in DEFINITIONS:
             body = definition(text, name, end)
             if body:
                 index = body[1]
                 if name not in ('newenvironment', 'renewenvironment'):
-                    ordinary.add(defined_command(text, end))
+                    defined = defined_command(text, end)
+                    ordinary.add(defined)
+                    if defined in flags:
+                        values[defined] = None
+                    for suffix in ('true', 'false'):
+                        if defined and defined.endswith(suffix):
+                            flag = 'if' + defined[:-len(suffix)]
+                            if flag in flags:
+                                values[flag] = None
                 yield start, index, 'definition', body[0]
             else:
                 yield start, end, 'unsupported', 'MALFORMED_MACRO_DEFINITION'
@@ -215,7 +256,11 @@ def events(text, non_conditionals=None, conditional_flags=None):
             branches = conditional(text, end, ordinary, flags)
             if branches:
                 yes, no, index = branches
-                payload = yes if name == 'iftrue' else no if name == 'iffalse' else None
+                known = True if name == 'iftrue' else False if name == 'iffalse' else values.get(name)
+                payload = yes if known is True else no if known is False else None
+                if payload is None:
+                    for flag in values:
+                        values[flag] = None
                 yield start, index, 'conditional', payload
             else:
                 index = len(text)
@@ -226,6 +271,8 @@ def events(text, non_conditionals=None, conditional_flags=None):
             _, condition_end = command(text, after) if after < len(text) and text[after] == '\\' else ('', after)
             branches = conditional(text, condition_end, ordinary, flags)
             index = branches[2] if branches else len(text)
+            for flag in values:
+                values[flag] = None
             yield start, index, 'conditional', None
             continue
         if name in CONDITIONAL_MACROS and name not in ordinary and name not in flags:
@@ -235,10 +282,14 @@ def events(text, non_conditionals=None, conditional_flags=None):
                 elif argument == 0:
                     token = spaces(text, index)
                     if token < len(text) and text[token] == '\\': _, index = command(text, token)
+            for flag in values:
+                values[flag] = None
             yield start, index, 'conditional', None
             continue
         if name in ('documentclass', 'documentstyle'):
             yield start, end, 'root', None
+        elif name == 'printbibliography':
+            yield start, end, 'printbibliography', None
         elif name in ('input', 'include', 'bibliography', 'addbibresource', 'includeonly', 'subfile', 'subfileinclude'):
             after = end
             if name == 'addbibresource':
@@ -277,14 +328,33 @@ def events(text, non_conditionals=None, conditional_flags=None):
                 yield start, index, 'enddocument', text[start:value[1]]
 
 
-def root_count(text, depth=0):
+def root_count(text, depth=0, non_conditionals=None, conditional_flags=None, flag_values=None, flag_scopes=None):
     if depth > MAX_DEPTH: raise GatheringError('NESTING_LIMIT', 'conditional nesting exceeds limit')
     count = 0
-    for _, _, kind, payload in events(text):
+    ordinary = set() if non_conditionals is None else non_conditionals
+    flags = set() if conditional_flags is None else conditional_flags
+    values = {} if flag_values is None else flag_values
+    scopes = [] if flag_scopes is None else flag_scopes
+    for _, _, kind, payload in events(text, ordinary, flags, values, scopes):
         if kind == 'root': count += 1
         elif kind == 'conditional' and payload is not None:
-            count += root_count(payload, depth + 1)
+            count += root_count(payload, depth + 1, ordinary, flags, values, scopes)
     return count
+
+
+def _path_candidates(names, bases, raw, suffix):
+    """Prefer an exact declared name; only then try the TeX/BibTeX suffix.
+
+    A dot in a basename (01.introduction) is not proof of an explicit suffix.
+    Multiple matches at either stage remain ambiguous.
+    """
+    paths = {posixpath.normpath(posixpath.join(base, raw)) for base in bases}
+    paths = {p for p in paths if p != '..' and not p.startswith('../')}
+    exact = paths & names
+    if exact:
+        return exact, bool(paths)
+    appended = {p + suffix for p in paths if not p.lower().endswith(suffix)}
+    return appended & names, bool(paths)
 
 
 def _declared_tex_dependency(context, origin, raw):
@@ -294,15 +364,7 @@ def _declared_tex_dependency(context, origin, raw):
         return None
     if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive or ':' in raw:
         return None
-    candidates = set()
-    for base in (posixpath.dirname(origin), ''):
-        path = posixpath.normpath(posixpath.join(base, raw))
-        if path == '..' or path.startswith('../'):
-            continue
-        if not PurePosixPath(path).suffix:
-            path += '.tex'
-        if path in context.names:
-            candidates.add(path)
+    candidates, _ = _path_candidates(context.names, (posixpath.dirname(origin), ''), raw, '.tex')
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
@@ -316,13 +378,90 @@ def _top_level_roots(context, roots):
     referenced = set()
     for origin in roots:
         for _, _, kind, payload in events(context.clean(origin)):
-            if kind not in ('input', 'include') or payload is None:
+            if kind not in ('input', 'include', 'subfile', 'subfileinclude') or payload is None:
                 continue
             target = _declared_tex_dependency(context, origin, payload)
+            if kind in ('subfile', 'subfileinclude') and target is not None:
+                try:
+                    _subfile_parts(context.clean(target))
+                except ValueError:
+                    continue
             if target in root_set and target != origin:
                 referenced.add(target)
     top_level = [name for name in roots if name not in referenced]
     return top_level if len(top_level) == 1 else roots
+
+
+def _compilation_hint(context):
+    """Read only fixed recovery sidecars and rederive their content from README."""
+    sidecar = context.base.parent / 'recovery_compilation.json'
+    if not sidecar.exists() and not sidecar.is_symlink():
+        return None
+    readme = context.base.parent / 'original_assets' / '00README.json'
+    try:
+        for path in (sidecar, readme):
+            no_symlinks(path)
+        with sidecar.open('rb') as handle:
+            raw_sidecar = handle.read(MAX_COMPILATION_BYTES + 1)
+        if len(raw_sidecar) > MAX_COMPILATION_BYTES:
+            raise ValueError('compilation sidecar exceeds size limit')
+        with readme.open('rb') as handle:
+            raw_readme = handle.read(MAX_COMPILATION_BYTES + 1)
+        expected = compilation_record(raw_readme, context.source.arxiv_id, context.source.version)
+        supplied = json.loads(raw_sidecar.decode('utf-8'))
+        if (not isinstance(supplied, dict) or type(supplied.get('version')) is not int
+                or type(supplied.get('schema_version')) is not int or supplied != expected):
+            raise ValueError('compilation sidecar differs from original README or identity')
+        return expected
+    except (OSError, UnicodeError, ValueError) as exc:
+        context.warn('INVALID_COMPILATION_METADATA', detail=str(exc))
+        return None
+
+
+def _subfile_parts(text):
+    """Recognize a literal subfiles document, excluding definitions and literals."""
+    index, depth = 0, 0
+    classes, begins, ends = [], [], []
+    while index < len(text):
+        if text[index] != '\\':
+            if text[index] == '{': depth += 1
+            elif text[index] == '}': depth -= 1
+            index += 1
+            continue
+        start = index
+        special = literal(text, start)
+        if special:
+            index = special[1]
+            continue
+        name, index = command(text, start)
+        if name in DEFINITIONS:
+            body = definition(text, name, index)
+            if body:
+                index = body[1]
+                continue
+        if is_conditional(name):
+            branches = conditional(text, index)
+            if branches:
+                if re.search(r'\\(?:begin|end)\s*\{document\}', branches[0] + branches[1]):
+                    raise ValueError('conditional document envelope is unsupported')
+                index = branches[2]
+                continue
+        if depth != 0:
+            continue
+        if name == 'documentclass':
+            optional = group(text, index, '[', ']')
+            value = group(text, optional[1] if optional else index)
+            if value:
+                classes.append(value[0].strip())
+                index = value[1]
+        elif name in ('begin', 'end'):
+            value = group(text, index)
+            if value and value[0].strip() == 'document':
+                (begins if name == 'begin' else ends).append((start, value[1]))
+                index = value[1]
+    if classes != ['subfiles'] or len(begins) != 1 or len(ends) != 1 or begins[0][1] > ends[0][0]:
+        raise ValueError('expected one literal documentclass{subfiles} and document envelope')
+    return text[:begins[0][0]], text[begins[0][1]:ends[0][0]]
 
 
 class Context:
@@ -343,7 +482,10 @@ class Context:
         self.pending_warnings = {}
         self.non_conditionals = set()
         self.conditional_flags = set()
+        self.flag_values = {}
+        self.flag_scopes = []
         self.root, self.includeonly = None, None
+        self.printbibliography_active = False
 
     def warn(self, code, origin='', detail=''):
         if self.root is None and origin in self.names:
@@ -387,25 +529,27 @@ class Context:
             self.warn('DYNAMIC_PATH', origin, raw); return None
         if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive or ':' in raw:
             self.warn('UNSAFE_PATH', origin, raw); return None
-        candidates, safe = set(), False
         bases = (posixpath.dirname(origin), posixpath.dirname(self.root or ''), '')
-        for base in bases:
-            path = posixpath.normpath(posixpath.join(base, raw))
-            if path == '..' or path.startswith('../'): continue
-            safe = True
-            if not PurePosixPath(path).suffix: path += suffix
-            if path in self.names: candidates.add(path)
+        candidates, safe = _path_candidates(self.names, bases, raw, suffix)
         if not candidates:
             missing_code = 'MISSING_BIB_RESOURCE' if suffix == '.bib' else 'MISSING_DEPENDENCY'
             self.warn(missing_code if safe else 'UNSAFE_PATH', origin, raw)
             return None
         if len(candidates) > 1:
+            if self.equivalent_bbl_resources(candidates):
+                preferred = posixpath.normpath(posixpath.join(posixpath.dirname(origin), raw))
+                return preferred if preferred in candidates else sorted(candidates)[0]
             self.warn('AMBIGUOUS_PATH', origin, raw + ' -> ' + ', '.join(sorted(candidates)))
             return None
         return next(iter(candidates))
 
+    def equivalent_bbl_resources(self, paths):
+        if not all(p.lower().endswith(('.bbl', '.bbl.tex', '.bbl.bib')) for p in paths):
+            return False
+        return len({self.read(p) for p in paths}) == 1
+
     def _load_bbl(self, path, origin):
-        """Read only a manifest-declared .bbl; preserve normal resource limits."""
+        """Read declared raw/derived BBL; preserve normal resource limits."""
         if path in self.bibs:
             return
         try:
@@ -421,13 +565,19 @@ class Context:
         candidates = {str(root_path.with_suffix('.bbl'))}
         if root_path.parent != PurePosixPath('.'):
             candidates.add(root_path.stem + '.bbl')
+        if self.printbibliography_active:
+            candidates |= {p + suffix for p in tuple(candidates) for suffix in ('.bib', '.tex')}
         found = sorted(candidates & self.names)
         if len(found) > 1:
-            self.warn('AMBIGUOUS_BBL_RESOURCE', self.root, ', '.join(found))
+            if self.equivalent_bbl_resources(found):
+                preferred = str(root_path.with_suffix('.bbl'))
+                self._load_bbl(preferred if preferred in found else found[0], self.root)
+            else:
+                self.warn('AMBIGUOUS_BBL_RESOURCE', self.root, ', '.join(found))
         elif found:
             self._load_bbl(found[0], self.root)
 
-    def expand(self, name, stack=()):
+    def expand(self, name, stack=(), *, subfile=False):
         if name in stack:
             self.warn('INCLUDE_CYCLE', name, ' -> '.join((*stack, name)))
             return None
@@ -439,12 +589,42 @@ class Context:
             return None
         if name not in self.included: self.included.append(name)
         for code, detail in self.pending_warnings.pop(name, []): self.warn(code, name, detail)
+        if subfile:
+            try:
+                preamble, text = _subfile_parts(text)
+            except ValueError as exc:
+                self.warn('UNSUPPORTED_SUBFILE', name, str(exc))
+                return None
+            self._subfile_bibliography(preamble, name)
         return self.expand_text(text, name, (*stack, name))
+
+    def _bibliography_resources(self, origin, payload):
+        for raw in payload.split(','):
+            target = self.resolve(origin, raw, '.bib')
+            if target is None:
+                continue
+            if not target.lower().endswith('.bib'):
+                self.warn('NON_BIB_RESOURCE', origin, target)
+                continue
+            try:
+                self.bibs[target] = self.read(target)
+            except (OSError, UnicodeError, ValueError) as exc:
+                if isinstance(exc, GatheringError) and exc.code.endswith('LIMIT'): raise
+                self.warn(getattr(exc, 'code', 'BIB_READ_FAILED'), origin, str(exc))
+
+    def _subfile_bibliography(self, preamble, origin, depth=0):
+        if depth > MAX_DEPTH:
+            raise GatheringError('NESTING_LIMIT', origin)
+        for _, _, kind, payload in events(preamble):
+            if kind in ('bibliography', 'addbibresource'):
+                self._bibliography_resources(origin, payload)
+            elif kind == 'conditional' and payload is not None:
+                self._subfile_bibliography(payload, origin, depth + 1)
 
     def expand_text(self, text, origin, stack, depth=0):
         if depth > MAX_DEPTH: raise GatheringError('NESTING_LIMIT', origin)
         pieces, position, size = [], 0, 0
-        for start, end, kind, payload in events(text, self.non_conditionals, self.conditional_flags):
+        for start, end, kind, payload in events(text, self.non_conditionals, self.conditional_flags, self.flag_values, self.flag_scopes):
             replacement = text[start:end]
             if kind == 'definition':
                 if DIRECTIVES.search(payload): self.warn('DEFERRED_MACRO_DIRECTIVE', origin)
@@ -459,7 +639,15 @@ class Context:
             elif kind == 'unsupported':
                 self.warn(payload, origin)
             elif kind in ('subfile', 'subfileinclude'):
-                self.warn('UNSUPPORTED_SUBFILE', origin, payload)
+                if kind in self.non_conditionals:
+                    self.warn('UNSUPPORTED_SUBFILE', origin, 'command redefined by source')
+                    continue
+                target = self.resolve(origin, payload, '.tex')
+                if target is not None:
+                    expanded = self.expand(target, stack, subfile=True)
+                    if expanded is not None: replacement = expanded
+            elif kind == 'printbibliography':
+                self.printbibliography_active = True
             elif kind == 'includeonly':
                 if any(c in payload for c in '\\#$'):
                     self.warn('DYNAMIC_INCLUDEONLY', origin)
@@ -472,7 +660,7 @@ class Context:
                 else:
                     target = self.resolve(origin, payload, '.tex')
                     if target is not None:
-                        if target.lower().endswith('.bbl'):
+                        if target.lower().endswith(('.bbl', '.bbl.tex')):
                             # Reference entries are extracted separately, not
                             # inserted into the document hierarchy.
                             self._load_bbl(target, origin)
@@ -483,16 +671,7 @@ class Context:
                             expanded = self.expand(target, stack)
                             if expanded is not None: replacement = expanded
             elif kind in ('bibliography', 'addbibresource'):
-                for raw in payload.split(','):
-                    target = self.resolve(origin, raw, '.bib')
-                    if target is not None:
-                        if not target.lower().endswith('.bib'):
-                            self.warn('NON_BIB_RESOURCE', origin, target)
-                            continue
-                        try: self.bibs[target] = self.read(target)
-                        except (OSError, UnicodeError, ValueError) as exc:
-                            if isinstance(exc, GatheringError) and exc.code.endswith('LIMIT'): raise
-                            self.warn(getattr(exc, 'code', 'BIB_READ_FAILED'), origin, str(exc))
+                self._bibliography_resources(origin, payload)
             prefix = text[position:start]
             size += len(prefix) + len(replacement)
             if size > MAX_OUTPUT_CHARS: raise GatheringError('OUTPUT_SIZE_LIMIT', origin)
@@ -535,6 +714,12 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
                     if isinstance(exc, GatheringError): raise
                     raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
         original_roots = roots
+        compilation_hint = _compilation_hint(context)
+        hinted_root = None
+        if compilation_hint and len(compilation_hint['toplevels']) == 1:
+            candidate = compilation_hint['toplevels'][0]
+            if candidate in roots:
+                hinted_root = candidate
         if selected_root is not None:
             # The choice must still be an active, manifest-listed root. Never
             # read an arbitrary path or silently accept a stale configuration.
@@ -545,13 +730,15 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
             context.warn('ROOT_SELECTED_BY_CONFIG', selected,
                          'candidates=' + ', '.join(roots))
         else:
-            if len(roots) > 1:
+            if hinted_root is not None:
+                roots = [hinted_root]
+            elif len(roots) > 1 and not (compilation_hint and len(compilation_hint['toplevels']) > 1):
                 roots = _top_level_roots(context, roots)
         if selected_root is None and len(roots) != 1:
             raise GatheringError('AMBIGUOUS_ROOT' if roots else 'NO_ROOT', ', '.join(roots))
         elif selected_root is None:
             context.root = roots[0]
-            if len(original_roots) > 1:
+            if len(original_roots) > 1 and hinted_root is None:
                 context.warn('ROOT_SELECTED_BY_DEPENDENCY_GRAPH', context.root,
                              'candidates=' + ', '.join(original_roots))
         result.root_file = context.root

@@ -48,7 +48,7 @@ _FIGURE_ENVS = {
 
 _LIST_ENVS = {"itemize", "enumerate", "description"}
 
-_BIB_ENVS = {"thebibliography", "thebibliography*"}
+_BIB_ENVS = {"thebibliography", "thebibliography*", "bibdiv", "biblist"}
 
 _ACK_ENVS = {
     "acknowledgements", "acknowledgments",

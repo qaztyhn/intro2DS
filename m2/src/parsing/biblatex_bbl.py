@@ -13,6 +13,15 @@ from .contracts import BibEntry
 _MAX_CHARS = 64 * 1024 * 1024
 _MAX_ENTRIES = 30000
 _MAX_DEPTH = 128
+
+
+def is_empty_bibliography(text: str) -> bool:
+    """Recognize an explicitly empty classic bibliography, not unknown text."""
+    if len(text) > _MAX_CHARS:
+        return False
+    clean = _without_comments(text)
+    return bool(re.fullmatch(r'\s*\\begin\s*\{thebibliography\}\s*\{[^{}]*\}\s*'
+                             r'\\end\s*\{thebibliography\}\s*', clean))
 _ENTRY = re.compile(r"\\entry(?![A-Za-z@])")
 _END_ENTRY = re.compile(r"\\endentry(?![A-Za-z@])")
 _COMMAND = re.compile(r"\\(field|name|list|verb)(?![A-Za-z@])")
@@ -49,6 +58,11 @@ def _without_comments(source: str) -> str:
         result.append(source[pos])
         pos += 1
     return "".join(result)
+
+
+def is_biblatex_bbl(text: str) -> bool:
+    """Detect Biber records after comments, rather than examples in comments."""
+    return bool(_ENTRY.search(_without_comments(text)))
 
 
 def _group(text: str, start: int) -> tuple[str, int]:
@@ -209,6 +223,11 @@ def parse_biblatex_bbl(text: str) -> tuple[list[BibEntry], list[str]]:
         key = key.strip()
         entry_type = entry_type.strip().lower()
         end = _END_ENTRY.search(clean, start)
+        following = _ENTRY.search(clean, start)
+        if following is not None and (end is None or following.start() < end.start()):
+            warnings.append(f"BBL_TRUNCATED_ENTRY key={key or '?'}: next entry before endentry")
+            position = following.start()
+            continue
         if end is None:
             warnings.append(f"BBL_TRUNCATED_ENTRY key={key or '?'}")
             break
@@ -225,3 +244,45 @@ def parse_biblatex_bbl(text: str) -> tuple[list[BibEntry], list[str]]:
     if not entries and not warnings and clean.strip():
         warnings.append("BBL_NO_ENTRIES: no Biber entries found")
     return entries, warnings
+
+
+def biblatex_bbl_to_bibtex(text: str) -> tuple[str, list[str]]:
+    """Serialize the supported Biber subset without inventing missing fields.
+
+    A caller must retain original bytes/provenance and these diagnostics. This
+    creates a derived bibliography, not a byte-preserving BBL replacement.
+    Unsafe keys/fields are rejected rather than producing malformed BibTeX.
+    """
+    entries, warnings = parse_biblatex_bbl(text)
+    rendered, issues = entries_to_bibtex(entries)
+    return rendered, warnings + issues
+
+
+def entries_to_bibtex(entries: list[BibEntry]) -> tuple[str, list[str]]:
+    """Safely serialize raw supported bibliography fields to derived BibTeX."""
+    rendered = []
+    warnings = []
+    for entry in entries:
+        key, kind = entry.original_key, entry.entry_type
+        if not re.fullmatch(r"[^\s,{}()=\"#%@]+", key) or not re.fullmatch(r"[A-Za-z]+", kind):
+            warnings.append(f"BBL_UNSERIALIZABLE_ENTRY key={key!r}")
+            continue
+        fields = []
+        for name, value in entry.fields.items():
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_:-]*", name) or not isinstance(value, str):
+                warnings.append(f"BBL_UNSERIALIZABLE_FIELD key={key} field={name}")
+                continue
+            wrapped = "{" + value + "}"
+            try:
+                _, end = _group(wrapped, 0)
+                if end != len(wrapped) or "\x00" in value:
+                    raise ValueError("unbalanced value")
+            except ValueError:
+                warnings.append(f"BBL_UNSERIALIZABLE_FIELD key={key} field={name}")
+                continue
+            fields.append(f"  {name} = {wrapped}")
+        if not fields:
+            warnings.append(f"BBL_UNSERIALIZABLE_ENTRY key={key!r}: no fields")
+            continue
+        rendered.append(f"@{kind}{{{key},\n" + ",\n".join(fields) + "\n}\n")
+    return "\n".join(rendered), warnings

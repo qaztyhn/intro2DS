@@ -60,7 +60,8 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
         for stage, seconds in result.stage_seconds.items():
             stages[stage] = stages.get(stage, 0) + seconds
         audit.append({'arxiv_id': identity, 'version_status': result.version_status,
-                      'warnings': result.warnings})
+                      'warnings': result.warnings,
+                      'bibliography_reconciliation': result.bibliography_reconciliation})
         if result.version_status and all(
                 row['status'] in {'failed', 'skipped'} for row in result.version_status):
             raise RuntimeError(f'{identity}: all recorded versions failed or were skipped')

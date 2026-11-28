@@ -62,3 +62,34 @@ UTF-8/BOM is preferred. UTF-16 BOM and byte-preserving Latin-1 fallback are expl
 Fixtures under `m2/tests/parsing/fixtures/` are synthetic, including single-file, multifile and nested include layouts. The existing synthetic M1 fixture supplies a multiversion TeX/PDF-only adapter integration case. Tests also cover comments/literals, repeated includes, missing files/cycles, relative/unsafe/ambiguous paths, bibliography selection, conditional/macro limits, encoding, no-TeX, schema failures, and immutable inputs.
 
 Tests do not call APIs, compile LaTeX, crawl, or process real corpora. Integration orchestration now handles publications and all their versions together; see INTEGRATION.md for the CLI and the remaining real-data validation gates.
+
+## Corpus recovery additions
+
+The recovery branch also accepts manifest-listed BBL bibliography resources; see
+`bbl_support.md`. It does not read arbitrary unlisted style/class/image files.
+
+Static path resolution now first checks the exact declared path across the
+existing origin/root/source search locations, then tries appending `.tex` or
+`.bib` only when no exact path exists. Thus `sections/01.introduction` can resolve
+to `sections/01.introduction.tex`. Multiple matches still emit `AMBIGUOUS_PATH`.
+The same resolver rule is used for dependency-graph root selection.
+
+Root scanning and gathering recognize `newif` flags with their initial false
+value and explicit `<name>true`/`<name>false` assignments. Known branches share
+state in execution order, including reached input files; brace groups and
+`begingroup`/`endgroup` restore local values, while explicit global setters
+survive those groups. Unknown conditions remain unexpanded and invalidate flag
+knowledge so a later branch is not selected using a potentially stale value.
+This does not add general macro expansion, package/engine execution or catcode
+interpretation. Root conditions requiring those features remain unresolved.
+
+`ifdefempty`, `ifblank`, `ifstrempty` and `ifcsempty` are recognized as package
+conditionals with three arguments, rather than primitives requiring `fi`.
+Their branch is not guessed: gathering preserves the block with an
+`UNRESOLVED_CONDITIONAL` diagnostic and continues after the arguments.
+
+Regression fixtures are in `test_gathering_recovery.py`. A read-only check of six
+real v1 sources from range 24120058 recovered three formerly hidden roots;
+two sources gathered as `ok`, while the others retained genuine missing-resource
+or unresolved-conditional warnings. This is a targeted check, not a full-corpus
+success-rate measurement.

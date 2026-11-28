@@ -18,6 +18,27 @@ class M1AdapterError(ValueError):
         super().__init__(f'{arxiv_id} stage=m1_adapter {code}: {detail}')
 
 
+def load_recovery_warnings(run_dir: Path, arxiv_id: str, version: int) -> list[str]:
+    """Read only the canonical manifest's optional conversion diagnostics.
+
+    No recovery sidecar path is followed. A malformed warning field fails closed
+    so lossy converted data cannot silently become a fully successful version.
+    """
+    run = no_symlinks(Path(run_dir).absolute())
+    cfg = {'output_root': run.parent, 'run_id': run.name}
+    manifest = load_manifest(cfg, arxiv_id, version)
+    if manifest is None:
+        raise ValueError(f'{arxiv_id}v{version}: missing recovery manifest')
+    if manifest.get('arxiv_id') != arxiv_id or manifest.get('version') != version:
+        raise ValueError(f'{arxiv_id}v{version}: recovery manifest identity mismatch')
+    warnings = manifest.get('recovery_bibliography_warnings', [])
+    if (not isinstance(warnings, list) or len(warnings) > 30000
+            or any(not isinstance(w, str) or not w.strip() or len(w) > 16384 for w in warnings)
+            or sum(len(w) for w in warnings) > 1024 * 1024):
+        raise ValueError(f'{arxiv_id}v{version}: invalid recovery_bibliography_warnings')
+    return list(warnings)
+
+
 def load_versions(run_dir: Path, arxiv_id: str) -> list[SourceVersion]:
     """Return metadata/observed version union; missing manifests become failures.
 

@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 
-from .bibliography import cited_keys, extract_bibliography_detailed, unify_bibliography
+from .bibliography import build_key_resolver, cited_keys, extract_bibliography_detailed, unify_bibliography
 from .contracts import GatheredDocument, ParsedDocument
 from .deduplication import deduplicate_with_stats
 from .export import bibtex_rows
 from .gathering import gather_source, gather_source_with_root
 from .hierarchy import parse_hierarchy
-from .m1_adapter import load_versions
+from .m1_adapter import load_recovery_warnings, load_versions
 from .qa_report import status_row
 
 LOGGER = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ class PublicationResult:
     warnings: list[str] = field(default_factory=list)
     bib_entries_before: int = 0
     stage_seconds: dict[str, float] = field(default_factory=dict)
+    bibliography_reconciliation: list[dict] = field(default_factory=list)
 
 
 def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=None) -> PublicationResult:
@@ -52,6 +53,7 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
     if set(choices) - {source.version for source in versions}:
         raise ValueError(f'{arxiv_id} stage=root_selection choice refers to an unknown version')
     gathered = []
+    recovery_diagnostics = {}
     for source in versions:
         try:
             if source.version in choices:
@@ -60,6 +62,14 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                 doc.warnings.append(f'{arxiv_id}v{source.version} stage=root_selection reason={choice["reason"]}')
             else:
                 doc = measured('gather', gather_source, source)
+            if doc.status in {'ok', 'partial'}:
+                issues = load_recovery_warnings(Path(run_dir), arxiv_id, source.version)
+                if issues:
+                    messages = [f'{arxiv_id}v{source.version} stage=bibliography '
+                                f'RECOVERY_CONVERSION_WARNING: {issue}' for issue in issues]
+                    recovery_diagnostics[source.version] = messages
+                    doc.warnings.extend(messages)
+                    doc.status = 'partial'
         except Exception as error:
             LOGGER.exception('%s v%s stage=gather', arxiv_id, source.version)
             doc = GatheredDocument(arxiv_id, source.version, None, '', [], {}, 'failed',
@@ -69,8 +79,12 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
     for doc in gathered:
         if doc.status in {'ok', 'partial'}:
             try:
+                def extract_with_provenance():
+                    return extract_bibliography_detailed(doc,
+                        conflict_sink=result.bibliography_reconciliation)
                 entries[doc.version], bib_diagnostics[doc.version] = measured(
-                    'bibliography_extract', extract_bibliography_detailed, doc)
+                    'bibliography_extract', extract_with_provenance)
+                bib_diagnostics[doc.version].extend(recovery_diagnostics.get(doc.version, []))
             except Exception as error:  # isolation boundary, never silent
                 errors[doc.version] = ('bibliography_extract', str(error))
                 LOGGER.exception('%s v%s stage=bibliography_extract', arxiv_id, doc.version)
@@ -94,13 +108,16 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                                   list(doc.warnings) + [f'{error[0]}: {error[1]}'])
         missing = set()
         if tree.root is not None:
+            resolve_key = build_key_resolver({**{key: key for key in known_keys},
+                                             **bibliography.key_mapping.get(doc.version, {})})
             pending = [tree.root]
             while pending:
                 node = pending.pop()
-                missing.update(cited_keys(node.content) - known_keys)
+                missing.update(key for key in cited_keys(node.content)
+                               if resolve_key(key) not in known_keys)
                 pending.extend(node.children)
             diagnostics = bib_diagnostics.get(doc.version, [])
-            tree.warnings.extend(diagnostics)
+            tree.warnings.extend(w for w in diagnostics if w not in tree.warnings)
             if missing:
                 tree.warnings.append(f'{arxiv_id}v{doc.version} stage=bibliography '
                                      'MISSING_CITATION_KEYS: ' + ', '.join(sorted(missing)))

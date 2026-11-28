@@ -16,7 +16,7 @@ def test_client_error_codes():
 
 def test_mark_counts_as_a_request_for_the_next_wait(monkeypatch):
     slept = []
-    monkeypatch.setattr("src.utils.http.time.sleep", slept.append)
+    monkeypatch.setattr("m1.src.utils.http.time.sleep", slept.append)
     throttle = Throttle(3)
     throttle.mark()
     throttle.wait()

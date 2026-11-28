@@ -95,7 +95,8 @@ def test_bibitem_newblock_and_label():
     assert e.fields["label"] == "Smith et~al.(2020)"
     assert e.fields["author"] == "J.~Smith and A.~Doe."
     assert e.fields["title"] == "Deep learning for {X}."
-    assert e.fields["journal"].startswith("\\emph{Nature}")
+    assert e.fields["journal"] == "Nature"
+    assert r'\emph{Nature}' in e.fields['raw']
     assert e.fields["doi"] == "10.1000/xyz123"
     assert e.fields["year"] == "2020"
     assert warns == []

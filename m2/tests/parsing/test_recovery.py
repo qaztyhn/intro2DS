@@ -64,7 +64,8 @@ def test_newif_declaration_takes_precedence_over_package_macro_name(tmp_path):
                              r'\ifdraft\input{ghost}\else\input{other}\fi AFTER\end{document}'})
     result = gather_source(item)
     assert result.status == 'partial' and 'AFTER' in result.latex
-    assert not any('UNTERMINATED' in w or 'MISSING_DEPENDENCY' in w for w in result.warnings)
+    assert not any('UNTERMINATED' in w or 'ghost' in w for w in result.warnings)
+    assert any('MISSING_DEPENDENCY' in w and 'other' in w for w in result.warnings)
 
 
 def test_missing_bibliography_is_distinct_from_failed_source_include(tmp_path):

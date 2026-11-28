@@ -48,7 +48,7 @@ def test_pipeline_overlaps_papers_and_stores_after_both(tmp_path, monkeypatch):
             stored.append(pid)
 
     monkeypatch.setattr(pipeline, "discover_batches", discover)
-    monkeypatch.setattr("src.downloader.http.download_paper", download)
+    monkeypatch.setattr("m1.src.downloader.http.download_paper", download)
     result = pipeline.run_bounded_pipeline(
         cfg, ids, None, {}, None,
         [("extract", extract), ("references", refs), ("storage", store)],
@@ -71,7 +71,7 @@ def test_discovery_failure_does_not_enter_workers(tmp_path, monkeypatch):
             {ids[0]: "failed", ids[1]: "ok"},
     )
     monkeypatch.setattr(
-        "src.downloader.http.download_paper",
+        "m1.src.downloader.http.download_paper",
         lambda *args: {"ok": 1, "failed": 0, "skipped": 0},
     )
     processed = []
