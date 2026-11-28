@@ -417,3 +417,13 @@ def test_incomplete_preserve_audit_reports_version_error(tmp_path):
     doc = module.gather_source(item)
     assert doc.status == 'failed'
     assert any(f'{item.arxiv_id}v1 stage=gather INVALID_SOURCE_ASSET_AUDIT:' in w for w in doc.warnings)
+
+
+def test_legacy_audit_never_promotes_package_to_root(tmp_path):
+    item = source(tmp_path, {'snippet.tex': 'Just a fragment.',
+                             'style.sty.tex': r'\documentclass{article}\begin{document}Style.\end{document}'})
+    write_asset_audit(item, [('snippet.tex', 'snippet.tex', 'unchanged'),
+                             ('style.sty', 'style.sty.tex', 'text_asset_to_tex')])
+    doc = module.gather_source(item)
+    assert doc.status == 'failed' and doc.root_file is None
+    assert any('NO_ROOT' in warning for warning in doc.warnings)

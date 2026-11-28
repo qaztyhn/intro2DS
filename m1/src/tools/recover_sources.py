@@ -212,6 +212,16 @@ def referenced_text_assets(original):
     return _asset_paths(original)[1]
 
 
+def extra_asset_candidate(name, head):
+    """Skip obvious non-source members before staging their entire payload."""
+    path = Path(name)
+    if path.suffix.lower() in EXCLUDED_SUFFIXES or path.name.startswith('.'):
+        return False
+    if b'\0' in head and not head.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return False
+    return not head.startswith((b'%PDF-', b'\x89PNG', b'\xff\xd8\xff', b'PK\x03\x04'))
+
+
 def select_extra_assets(stage, candidates):
     """Select unknown-suffix text by syntax or reachable literal dependency.
 
@@ -443,7 +453,8 @@ def recover_version(item, output, *, download=False):
         download_info = download_original_archive(url, archive)
     original = directory / 'original_assets'
     result = extract_source(archive, original, source_suffixes=RECOVERY_SUFFIXES,
-                            source_names={'00README.json'}, select_extra=select_extra_assets)
+                            source_names={'00README.json'}, select_extra=select_extra_assets,
+                            extra_candidate=extra_asset_candidate)
     if result['extract_status'] == 'failed':
         return dict(arxiv_id=identity, version=version, member_id=item.get('member_id'),
                     status='extract_failed', extraction=result)

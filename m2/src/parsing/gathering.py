@@ -536,6 +536,7 @@ class Context:
             self.names.add(relative)
         self.cache, self.clean_cache = {}, {}
         self.asset_aliases = {}
+        self.legacy_root_candidates = set()
         self.bytes_read = 0
         self.warnings, self.included, self.bibs = [], [], {}
         self.pending_warnings = {}
@@ -787,6 +788,15 @@ def _load_document_assets(context):
         audit = json.loads(raw)
         documents = _document_assets(audit, context.source)
         if documents is not None:
+            # Old audits predate explicit roles. Retain their conservative
+            # fallback for non-package documents, never for class/style files.
+            package_suffixes = {'.sty', '.cls', '.def', '.bst', '.cfg', '.clo', '.fd',
+                                '.bbx', '.cbx', '.lbx', '.dbx', '.dtx', '.ins', '.bib', '.bbl'}
+            context.legacy_root_candidates = {
+                relative_path(row['derived']) for row in audit['records']
+                if 'derived' in row and 'asset_role' not in row
+                and PurePosixPath(row['original']).suffix.lower() not in package_suffixes
+                and row['derived'] not in documents}
             context.asset_aliases = {
                 relative_path(row['original']): relative_path(row['derived'])
                 for row in audit['records'] if 'derived' in row
@@ -846,6 +856,10 @@ def _gather_source(source: SourceVersion, selected_root=None, root_reviews=None)
         tex_files = {name for name in context.names - ignored if name.lower().endswith('.tex')}
         eligible = tex_files if documents is None else tex_files & documents
         roots = _scan_roots(context, eligible)
+        if not roots and context.legacy_root_candidates:
+            roots = _scan_roots(context, tex_files & context.legacy_root_candidates)
+            if roots:
+                context.warn('ROOT_FROM_DERIVED_ASSET', detail=', '.join(roots))
         original_roots = roots
         hinted_root = None
         if compilation_hint and len(compilation_hint['toplevels']) == 1:

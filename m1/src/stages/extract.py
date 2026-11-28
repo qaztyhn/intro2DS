@@ -100,7 +100,7 @@ def _members(archive, reader):
         reader.in_data = True  # from here until the next start_header, only data is read
         yield member
         
-def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), inventory=None, select_extra=None):
+def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), inventory=None, select_extra=None, extra_candidate=None):
     total, kept, files, seen = 0, 0, [], set()
     candidates = set()
     with payload.open("rb") as handle, tarfile.open(fileobj=(reader := _TarReader(handle)), mode="r:") as archive:
@@ -129,7 +129,8 @@ def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), 
             # selector. The existing archive/member limits also bound this staging.
             with archive.extractfile(member) as source:
                 head = source.read(min(65536, member.size))
-                extra = not keep and select_extra is not None
+                extra = (not keep and select_extra is not None and
+                         (extra_candidate is None or extra_candidate(name, head)))
                 if keep or extra:
                     target = safe_path(stage, name)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -213,7 +214,7 @@ def _same_output(existing, staged, files):
 
 
 def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=False,
-                   source_suffixes=None, source_names=(), select_extra=None):
+                   source_suffixes=None, source_names=(), select_extra=None, extra_candidate=None):
     """Return extraction fields plus output_path/message, without writing a manifest.
 
     Existing nonempty output is never replaced. reuse_existing permits recovery
@@ -266,7 +267,7 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
             elif _is_tar(payload):
                 result["source_format"] = "tar.gz" if compressed else "tar"
                 files, total, kept = _extract_tar(payload, stage, limits, source_suffixes, source_names,
-                                                result['asset_inventory'], select_extra)
+                                                result['asset_inventory'], select_extra, extra_candidate)
             elif head[257:262] == b"ustar":
                 raise CrawlError("corrupt tar header", CORRUPT_SOURCE)
             elif _is_tex(head):

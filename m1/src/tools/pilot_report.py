@@ -278,7 +278,8 @@ def version_report(run, version, row, durations):
     eligible = tex if originals is None else tex & originals
     # Count document roots before compilation metadata or dependency graph selection.
     roots = [n for n in sorted(eligible) if g.root_count(context.clean(n))]
-    result['root_candidates'] = roots
+    result['root_candidates'] = roots or [n for n in sorted(tex & context.legacy_root_candidates)
+                                          if g.root_count(context.clean(n))]
     audit_path = directory / 'source_assets_audit.json'
     if not audit_path.is_file():
         return result
