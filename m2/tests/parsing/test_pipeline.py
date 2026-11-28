@@ -156,14 +156,14 @@ def test_partial_gathering_keeps_recoverable_bibliography_and_reports_warning(mu
 
 
 def test_unexpected_gather_exception_is_logged_and_isolated(multiversion, monkeypatch, caplog):
-    original = pipeline.gather_source
+    original = pipeline.gather_source_for_review
 
-    def gather(source):
+    def gather(source, reviews):
         if source.version == 1:
             raise RuntimeError('synthetic gather failure')
-        return original(source)
+        return original(source, reviews)
 
-    monkeypatch.setattr(pipeline, 'gather_source', gather)
+    monkeypatch.setattr(pipeline, 'gather_source_for_review', gather)
     result = pipeline.process_publication_detailed(multiversion, ID)
     assert [row['status'] for row in result.version_status] == ['failed', 'ok', 'no_tex', 'failed']
     assert 'synthetic gather failure' in caplog.text
@@ -320,3 +320,27 @@ def test_info_missing_resource_does_not_erase_hierarchy_reason(multiversion):
     assert row["status"] == "partial"
     assert "DOCUMENT_END_MISSING" in row["partial_reasons"]
     assert row["info_diagnostics"] == ["MISSING_BIB_RESOURCE"]
+
+
+def test_cli_writes_ambiguous_root_review_beside_qa(multiversion, tmp_path):
+    directory = multiversion / "papers" / ID.replace(".", "-") / "versions/v1/source"
+    (directory / "unused.tex").write_text(
+        r"\documentclass{article}\title{" + "x" * 170 + r"}\verb|\begin{thebibliography}|")
+    ids = tmp_path / "ids.txt"
+    ids.write_text(ID)
+    run(multiversion, ids, tmp_path / "out", "ambiguous")
+    tables = tmp_path / "out/ambiguous/tables"
+    assert (tables / "qa_report.json").is_file()
+    review, = json.loads((tables / "root_review.json").read_text())
+    assert (review["arxiv_id"], review["version"]) == (ID, 1)
+    assert [r["root_file"] for r in review["candidates"]] == ["article.tex", "unused.tex"]
+    candidate = review["candidates"][1]
+    assert candidate["title"] == "x" * 160
+    assert candidate["readme_role"] is None
+    assert not candidate["has_thebibliography"]
+
+
+def test_direct_root_choice_requires_reason(multiversion):
+    with pytest.raises(ValueError, match=rf"{ID}v1 stage=root_selection INVALID_ROOT_SELECTION"):
+        pipeline.process_publication_detailed(multiversion, ID, root_choices={
+            1: {"root_file": "article.tex", "reason": " "}})

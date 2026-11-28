@@ -6,12 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 
+from m1.src.schema import relative_path
 from .bibliography import build_key_resolver, cited_keys, extract_bibliography_detailed, unify_bibliography
 from .contracts import GatheredDocument, ParsedDocument
 from .diagnostics import diagnostic_codes
 from .deduplication import deduplicate_with_stats
 from .export import bibtex_rows
-from .gathering import gather_source, gather_source_with_root
+from .gathering import gather_source_for_review, gather_source_with_root
 from .hierarchy import parse_hierarchy
 from .m1_adapter import load_recovery_warnings, load_versions
 from .qa_report import status_row
@@ -28,7 +29,21 @@ class PublicationResult:
     warnings: list[str] = field(default_factory=list)
     bib_entries_before: int = 0
     stage_seconds: dict[str, float] = field(default_factory=dict)
+    root_reviews: list[dict] = field(default_factory=list, init=False)
     bibliography_reconciliation: list[dict] = field(default_factory=list)
+
+
+def validate_root_choice(identity, version, choice):
+    context = f'{identity}v{version} stage=root_selection INVALID_ROOT_SELECTION'
+    if not isinstance(choice, dict) or set(choice) != {'root_file', 'reason'}:
+        raise ValueError(f'{context}: each root choice requires root_file and reason')
+    if not isinstance(choice['reason'], str) or not choice['reason'].strip():
+        raise ValueError(f'{context}: root choice reason must be nonempty')
+    try:
+        name = relative_path(choice['root_file'])
+    except ValueError as exc:
+        raise ValueError(f'{context}: {exc}') from exc
+    return dict(root_file=name, reason=choice['reason'])
 
 
 def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=None) -> PublicationResult:
@@ -50,7 +65,7 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
     versions = measured('adapter', load_versions, Path(run_dir), arxiv_id)
     if not versions:
         raise ValueError(f'{arxiv_id} version=unknown stage=adapter NO_RECORDED_VERSIONS')
-    choices = root_choices or {}
+    choices = {v: validate_root_choice(arxiv_id, v, c) for v, c in (root_choices or {}).items()}
     if set(choices) - {source.version for source in versions}:
         raise ValueError(f'{arxiv_id} stage=root_selection choice refers to an unknown version')
     gathered = []
@@ -62,7 +77,7 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                 doc = measured('gather', gather_source_with_root, source, choice['root_file'])
                 doc.warnings.append(f'{arxiv_id}v{source.version} stage=root_selection reason={choice["reason"]}')
             else:
-                doc = measured('gather', gather_source, source)
+                doc = measured('gather', gather_source_for_review, source, result.root_reviews)
             if doc.status in {'ok', 'partial'}:
                 # Gathering labels every warning partial. Defer missing-resource impact
                 # until citation resolution, without masking independent hierarchy warnings.

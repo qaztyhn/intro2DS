@@ -187,6 +187,10 @@ def conditional(text, end, non_conditionals=(), conditional_flags=()):
 
 def events(text, non_conditionals=None, conditional_flags=None, flag_values=None, flag_scopes=None):
     """Yield nonoverlapping (start, end, kind, payload) lexical events."""
+    yield from _events(text, non_conditionals, conditional_flags, flag_values, flag_scopes)
+
+
+def _events(text, non_conditionals, conditional_flags, flag_values, flag_scopes, *, review=False):
     index = 0
     ordinary = set() if non_conditionals is None else non_conditionals
     flags = set() if conditional_flags is None else conditional_flags
@@ -286,7 +290,17 @@ def events(text, non_conditionals=None, conditional_flags=None, flag_values=None
                 values[flag] = None
             yield start, index, 'conditional', None
             continue
-        if name in ('documentclass', 'documentstyle'):
+        if review and name == 'title':
+            optional = group(text, end, '[', ']')
+            title = group(text, optional[1] if optional else end)
+            if title:
+                payload, index = title
+                yield start, index, 'title', payload
+        elif review and name == 'begin':
+            environment = group(text, end)
+            if environment and environment[0].strip() == 'thebibliography':
+                yield start, end, 'thebibliography', None
+        elif name in ('documentclass', 'documentstyle'):
             yield start, end, 'root', None
         elif name == 'printbibliography':
             yield start, end, 'printbibliography', None
@@ -357,14 +371,14 @@ def _path_candidates(names, bases, raw, suffix):
     return appended & names, bool(paths)
 
 
-def _declared_tex_dependency(context, origin, raw):
+def _declared_tex_dependency(names, origin, raw):
     """Resolve one static TeX dependency without guessing or warnings."""
     raw = raw.strip()
     if not raw or any(c in raw for c in '\\#$\x00{}'):
         return None
     if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive or ':' in raw:
         return None
-    candidates, _ = _path_candidates(context.names, (posixpath.dirname(origin), ''), raw, '.tex')
+    candidates, _ = _path_candidates(names, (posixpath.dirname(origin), ''), raw, '.tex')
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
@@ -380,7 +394,7 @@ def _top_level_roots(context, roots):
         for _, _, kind, payload in events(context.clean(origin)):
             if kind not in ('input', 'include', 'subfile', 'subfileinclude') or payload is None:
                 continue
-            target = _declared_tex_dependency(context, origin, payload)
+            target = _declared_tex_dependency(context.names, origin, payload)
             if kind in ('subfile', 'subfileinclude') and target is not None:
                 try:
                     _subfile_parts(context.clean(target))
@@ -390,6 +404,49 @@ def _top_level_roots(context, roots):
                 referenced.add(target)
     top_level = [name for name in roots if name not in referenced]
     return top_level if len(top_level) == 1 else roots
+
+
+def _review_events(text, ordinary, flags, values, scopes):
+    for start, _, kind, payload in _events(text, ordinary, flags, values, scopes, review=True):
+        if kind == 'conditional' and payload is not None:
+            # root_count already checked the nesting limit on the same source.
+            yield from _review_events(payload, ordinary, flags, values, scopes)
+        elif kind != 'input' or command(text, start)[0] == 'input':
+            yield kind, payload
+
+
+def build_root_review(arxiv_id, version, clean_roots, names, hint):
+    """Summarize active commands in candidate files using already loaded text."""
+    candidates = []
+    included_by = {name: set() for name in clean_roots}
+    for name, text in sorted(clean_roots.items()):
+        inputs = set()
+        title = None
+        bibliography = thebibliography = False
+        for kind, payload in _review_events(text, set(), set(), {}, []):
+            if kind == 'title' and title is None:
+                title = ' '.join(payload.split())[:160]
+            elif kind == 'bibliography':
+                bibliography = True
+            elif kind == 'thebibliography':
+                thebibliography = True
+            elif kind == 'input':
+                target = _declared_tex_dependency(names, name, payload)
+                if target:
+                    inputs.add(target)
+                    if target in included_by and target != name:
+                        included_by[target].add(name)
+        role = None
+        if hint and name in hint['toplevels']:
+            role = 'toplevel'
+        elif hint and name in hint['ignored']:
+            role = 'ignore'
+        candidates.append(dict(root_file=name, title=title, readme_role=role,
+                               has_bibliography=bibliography, has_thebibliography=thebibliography,
+                               input_file_count=len(inputs)))
+    for candidate in candidates:
+        candidate['input_by_roots'] = sorted(included_by[candidate['root_file']])
+    return dict(arxiv_id=arxiv_id, version=version, candidates=candidates)
 
 
 def _compilation_hint(context):
@@ -681,7 +738,7 @@ class Context:
         return ''.join(pieces)
 
 
-def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocument:
+def _gather_source(source: SourceVersion, selected_root=None, root_reviews=None) -> GatheredDocument:
     """Gather one version. included_files is first-visit TeX order, not dedup.
 
     Root ambiguity is failed. Recoverable dependencies produce partial output
@@ -703,8 +760,10 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
             return result
         if source.extract_status != 'ok': raise GatheringError('SOURCE_NOT_EXTRACTED', source.error_code or source.extract_status)
         context = Context(source)
+        compilation_hint = _compilation_hint(context)
+        ignored = set(compilation_hint['ignored']) if compilation_hint else set()
         roots = []
-        for name in sorted(context.names):
+        for name in sorted(context.names - ignored):
             if name.lower().endswith('.tex'):
                 try:
                     count = root_count(context.clean(name))
@@ -714,7 +773,6 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
                     if isinstance(exc, GatheringError): raise
                     raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
         original_roots = roots
-        compilation_hint = _compilation_hint(context)
         hinted_root = None
         if compilation_hint and len(compilation_hint['toplevels']) == 1:
             candidate = compilation_hint['toplevels'][0]
@@ -735,6 +793,10 @@ def _gather_source(source: SourceVersion, selected_root=None) -> GatheredDocumen
             elif len(roots) > 1 and not (compilation_hint and len(compilation_hint['toplevels']) > 1):
                 roots = _top_level_roots(context, roots)
         if selected_root is None and len(roots) != 1:
+            if roots and root_reviews is not None:
+                clean_roots = {name: context.clean_cache[name] for name in roots}
+                root_reviews.append(build_root_review(source.arxiv_id, source.version, clean_roots,
+                                                     context.names, compilation_hint))
             raise GatheringError('AMBIGUOUS_ROOT' if roots else 'NO_ROOT', ', '.join(roots))
         elif selected_root is None:
             context.root = roots[0]
@@ -762,3 +824,8 @@ def gather_source(source: SourceVersion) -> GatheredDocument:
 def gather_source_with_root(source: SourceVersion, root_file: str) -> GatheredDocument:
     """Gather a reviewed root choice without changing the team's public interface."""
     return _gather_source(source, selected_root=root_file)
+
+
+def gather_source_for_review(source, root_reviews):
+    """Collect evidence only when ordinary gathering finds ambiguous roots."""
+    return _gather_source(source, root_reviews=root_reviews)

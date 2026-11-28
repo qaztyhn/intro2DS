@@ -133,3 +133,42 @@ def test_printbibliography_retains_bbl_ambiguity(tmp_path):
     assert result.status == 'partial'
     assert not result.bib_files
     assert any('AMBIGUOUS_BBL_RESOURCE' in w for w in result.warnings)
+
+
+def test_ignore_excludes_root_even_without_declared_toplevel(tmp_path):
+    from m2.src.parsing.gathering import gather_source_with_root
+
+    item = source(tmp_path, {'work.tex': r'\documentclass{article}',
+                             'doc/template.tex': r'\documentclass{article}'})
+    hint(tmp_path, [{'filename': 'doc/template.tex', 'usage': 'ignore'}])
+    doc = gather_source(item)
+    assert (doc.status, doc.root_file) == ('ok', 'work.tex')
+    rejected = gather_source_with_root(item, 'doc/template.tex')
+    assert rejected.status == 'failed'
+    assert any('INVALID_ROOT_SELECTION' in w for w in rejected.warnings)
+
+
+def test_ambiguous_roots_review_only_active_evidence(tmp_path):
+    from m2.src.parsing.gathering import gather_source_for_review
+
+    item = source(tmp_path, {
+        'main.tex': r'\documentclass{article}\title[short]{Main {Title}}'
+                    r'\bibliography{refs}\input{SI}\input{SI.tex}\input{part}',
+        'SI.tex': r'\documentclass{article}\verb|\bibliography{fake}|'
+                  r'\verb*+\begin{thebibliography}+\iffalse\input{main}\fi'
+                  r'\begin{thebibliography}{1}\end{thebibliography}',
+        'part.tex': 'Body',
+        'unused.tex': r'\documentclass{book}',
+    })
+    hint(tmp_path, [{'filename': name, 'usage': 'toplevel'} for name in ('main.tex', 'SI.tex')]
+         + [{'filename': 'unused.tex', 'usage': 'ignore'}])
+    reviews = []
+    doc = gather_source_for_review(item, reviews)
+    assert doc.status == 'failed'
+    assert any('AMBIGUOUS_ROOT' in w for w in doc.warnings)
+    assert reviews == [dict(arxiv_id=item.arxiv_id, version=1, candidates=[
+        dict(root_file='SI.tex', readme_role='toplevel', title=None, input_file_count=0,
+             has_bibliography=False, has_thebibliography=True, input_by_roots=['main.tex']),
+        dict(root_file='main.tex', readme_role='toplevel', title='Main {Title}', input_file_count=2,
+             has_bibliography=True, has_thebibliography=False, input_by_roots=[]),
+    ])]

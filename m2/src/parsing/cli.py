@@ -6,9 +6,10 @@ import json
 import logging
 from pathlib import Path
 
-from m1.src.schema import no_symlinks, relative_path, require_arxiv_id
+from m1.src.schema import no_symlinks, require_arxiv_id
+from m1.src.utils.common import write_json_atomic
 from .benchmark import run_benchmark
-from .pipeline import process_publication_detailed
+from .pipeline import process_publication_detailed, validate_root_choice
 from .qa_report import build_qa_report
 
 
@@ -28,11 +29,7 @@ def load_root_choices(path: Path | None):
         for version, choice in versions.items():
             if not isinstance(version, str) or not version.isascii() or not version.isdecimal() or int(version) < 1 or str(int(version)) != version:
                 raise ValueError('root choice version must be a canonical positive integer string')
-            if not isinstance(choice, dict) or set(choice) != {'root_file', 'reason'}:
-                raise ValueError('each root choice requires root_file and reason')
-            if not isinstance(choice['reason'], str) or not choice['reason'].strip():
-                raise ValueError('root choice reason must be nonempty')
-            result[identity][int(version)] = dict(root_file=relative_path(choice['root_file']), reason=choice['reason'])
+            result[identity][int(version)] = validate_root_choice(identity, version, choice)
     return result
 
 
@@ -47,6 +44,7 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
         raise FileExistsError(f'output label already used: {label}')
     statuses, bib_before, stages = [], {}, {}
     audit = []
+    root_reviews = []
 
     def process(directory, identity):
         try:
@@ -55,6 +53,7 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
             logging.getLogger(__name__).exception('%s version=unknown stage=publication', identity)
             audit.append({'arxiv_id': identity, 'error_type': type(error).__name__, 'error': str(error)})
             raise
+        root_reviews.extend(result.root_reviews)
         statuses.extend(result.version_status)
         bib_before[identity] = result.bib_entries_before
         for stage, seconds in result.stage_seconds.items():
@@ -73,6 +72,9 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
     tables = output_dir / label / 'tables'
     qa = build_qa_report(tables, statuses, output_dir / f'benchmark_{label}.json',
                          bib_entries_before=bib_before, scope=f'ID list: {Path(ids_file).name}')
+    if root_reviews:
+        root_reviews.sort(key=lambda row: (row['arxiv_id'], row['version']))
+        write_json_atomic(tables / 'root_review.json', root_reviews)
     report = {'publications': audit, 'stage_seconds_sum': stages,
               'note': 'Per-stage sums include calls returning a detailed result, even when versions failed. '
                       'Publication attempts raising before that result are excluded; benchmark wall time includes them.'}
