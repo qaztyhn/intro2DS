@@ -6,11 +6,12 @@ from pathlib import Path
 import pytest
 
 from m3.src.evaluate import evaluate_mrr_at_5
+from m3.src.experiments import run_experiments
 from m3.src.model import fit_ranker, predict_top5
 from m3.tests.test_model import make_synth
 
 SRC = Path(__file__).resolve().parents[1] / "src"
-TV3_MODULES = ["model.py", "evaluate.py"]          # phase 4 thêm experiments.py
+TV3_MODULES = ["model.py", "evaluate.py", "experiments.py"]
 BANNED = ("requests", "urllib.request", "huggingface_hub", "transformers", "sentence_transformers", "nltk", "spacy",
           "urllib3", "http.client", "socket", "ftplib", "rapidfuzz")
 
@@ -58,3 +59,16 @@ def test_pipeline_runs_with_network_blocked(monkeypatch, estimator, params):
     out = predict_top5(model, queries=d["queries"], pairs=d["pairs"], labels=d["labels"], splits=d["splits"])
     assert out.num_rows == d["queries"].num_rows
     evaluate_mrr_at_5(predictions=out, labels=d["labels"], splits=d["splits"])
+
+
+def test_run_experiments_with_network_blocked(monkeypatch, tmp_path):
+    def blocked(*a, **k):
+        raise AssertionError("truy cập mạng bị chặn trong test offline")
+
+    monkeypatch.setattr(socket, "socket", blocked)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    from m3.tests.test_experiments import make_design
+    d = make_design()
+    path = run_experiments(pairs=d["pairs"], labels=d["labels"], splits=d["splits"], seed=2026, output_dir=tmp_path)
+    assert path.exists()
