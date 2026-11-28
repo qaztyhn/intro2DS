@@ -5,7 +5,8 @@ Các thí nghiệm
   logistic_regression  C ∈ {0.01, 0.1, 1, 10} chọn trên VALID; test đánh giá đúng một lần với C đã chọn.
   lightgbm_ranker      LGBMRanker lambdarank (n_jobs=1, deterministic); lưới nhỏ 2x2 chọn trên VALID.
   ablation             bỏ từng nhóm đặc trưng (title/author/year/id/other), giữ C đã chọn ở logistic_regression.
-  mask                 che url/DOI/arXiv ID 0/25/50/100%; cần `masked_pairs` (đặc trưng tính lại bởi TV1), nếu không thì skipped.
+  mask                 che url/DOI/arXiv ID 0/25/50/100%, chạy cả LR và LGBM; cần `masked_pairs` (đặc trưng tính lại bởi TV1),
+                       nếu không thì skipped. Ghi tỉ lệ dòng còn đặc trưng id khác null; mức 1.0 mà còn giá trị -> ValueError.
   candidate_distribution  số ứng viên mỗi bài test (min/median/max, histogram).
   random_baseline      MRR kỳ vọng của xếp hạng ngẫu nhiên: mỗi entry (1/n)·Σ_{k=1..min(5,n)} 1/k, lấy trung bình trên Q.
 
@@ -248,22 +249,95 @@ def _ablation(ctx: _Context, pairs: pa.Table, lr_model, lr_rec: dict, seed: int)
             "fixed_C": C, "reference": "logistic_regression (đủ đặc trưng)", "runs": runs}
 
 
+ID_RATE_DEFINITION = ("tử số = số dòng pairs có ít nhất một cột nhóm id khác null (NaN coi là null); mẫu số = tổng số dòng pairs "
+                      "của các bài thuộc partition đó; tính trên bảng pairs đã che của mức che tương ứng")
+
+
+def _nonnull(table: pa.Table, col: str) -> pa.ChunkedArray:
+    c = table.column(col)
+    ok = pc.is_valid(c)
+    if pa.types.is_floating(c.type):
+        ok = pc.and_(ok, pc.invert(pc.fill_null(pc.is_nan(c), False)))
+    return ok
+
+
+def _numeric_columns(table: pa.Table) -> list[str]:
+    return [n for n in table.schema.names if n not in KEY_COLUMNS
+            and (pa.types.is_boolean(table.schema.field(n).type) or pa.types.is_integer(table.schema.field(n).type)
+                 or pa.types.is_floating(table.schema.field(n).type))]
+
+
+def id_columns(table: pa.Table) -> list[str]:
+    g = group_features(_numeric_columns(table))
+    return [c for c, grp in g.items() if grp == "id"]
+
+
+def id_nonnull_rate(table: pa.Table, papers: set[str], cols: list[str]) -> dict:
+    """Tỉ lệ dòng pairs của `papers` có ít nhất một cột trong `cols` khác null (kèm tử số, mẫu số, và cột còn giá trị)."""
+    sub = _subset(table, papers)
+    n = sub.num_rows
+    if n == 0 or not cols:
+        return {"rows_with_nonnull_id": 0, "rows": n, "rate": 0.0 if n else None, "columns_with_values": []}
+    any_ok = _nonnull(sub, cols[0])
+    for c in cols[1:]:
+        any_ok = pc.or_(any_ok, _nonnull(sub, c))
+    hit = int(pc.sum(any_ok.cast(pa.int64())).as_py() or 0)
+    live = [c for c in cols if pc.sum(_nonnull(sub, c).cast(pa.int64())).as_py()]
+    return {"rows_with_nonnull_id": hit, "rows": n, "rate": hit / n, "columns_with_values": live}
+
+
+def _id_coverage_warning(cols: list[str]) -> str | None:
+    kinds = {"arXiv ID": [c for c in cols if "arxiv_id" in c.lower()], "DOI": [c for c in cols if "doi" in c.lower()],
+             "url": [c for c in cols if "url" in c.lower()]}
+    covered = [k for k, v in kinds.items() if v]
+    missing = [k for k, v in kinds.items() if not v]
+    if not missing:
+        return None
+    if not cols:
+        return "pairs không có cột nhóm id: thí nghiệm che không tác động lên đặc trưng nào"
+    return (f"nhóm id chỉ gồm {cols}: thí nghiệm che chỉ tác động lên {'/'.join(covered) or 'không loại nào'}, "
+            f"không tác động lên {'/'.join(missing)}")
+
+
 def _mask(ctx: _Context, masked_pairs, seed: int) -> dict:
     if not masked_pairs:
         return {"status": "skipped",
                 "reason": "run_experiments không nhận masked_pairs: che url/DOI/arXiv ID cần tính lại đặc trưng "
                           "(MaskConfig + build_pair_batch của TV1); xem CONTRACT_PROPOSALS_TV3.md"}
-    levels = {}
+    levels, all_id_cols = {}, []
     for frac in sorted(masked_pairs):
         if not isinstance(frac, (int, float)) or isinstance(frac, bool) or not 0.0 <= frac <= 1.0:
             raise ValueError(f"[masked_pairs] tỉ lệ che phải là số trong [0, 1], nhận {frac!r}")
-        validate_table("pairs", masked_pairs[frac])
-        rec, _ = _fit_select(ctx, masked_pairs[frac], estimator="logreg", grid=LR_GRID, features=None, seed=seed,
-                             name=f"logistic_regression_mask_{frac:g}")
-        rec["mask_fraction"] = float(frac)
-        levels[f"{frac:g}"] = rec
+        table = masked_pairs[frac]
+        validate_table("pairs", table)
+        cols = id_columns(table)
+        all_id_cols += [c for c in cols if c not in all_id_cols]
+        rate = {part: id_nonnull_rate(table, ctx.papers[part], cols) for part in ("train", "test")}
+        if frac == 1.0:                                      # che 100% mà vẫn còn giá trị -> che không có tác dụng
+            leaked = sorted({c for r in rate.values() for c in r["columns_with_values"]})
+            if leaked:
+                raise ValueError(
+                    f"[masked_pairs] mức che 1: cột nhóm id còn giá trị khác null: {leaked} "
+                    f"(train {rate['train']['rows_with_nonnull_id']}/{rate['train']['rows']}, "
+                    f"test {rate['test']['rows_with_nonnull_id']}/{rate['test']['rows']})")
+        lr, lr_model = _fit_select(ctx, table, estimator="logreg", grid=LR_GRID, features=None, seed=seed,
+                                   name=f"logistic_regression_mask_{frac:g}")
+        try:
+            lgbm = _fit_select(ctx, table, estimator="lgbm_ranker", grid=LGBM_GRID, features=None, seed=seed,
+                               name=f"lightgbm_lambdarank_mask_{frac:g}")[0]
+        except ImportError as e:
+            lgbm = {"status": "skipped", "reason": f"không import được lightgbm: {e}"}
+        levels[f"{frac:g}"] = {
+            "mask_fraction": float(frac), "id_columns": cols,
+            "id_columns_used_by_logistic_regression": [c for c in lr_model.features_used_ if c in cols],
+            "id_feature_nonnull_rate": rate,
+            "logistic_regression": lr, "lightgbm_ranker": lgbm}
+    warn = _id_coverage_warning(all_id_cols)
     wanted = (0.0, 0.25, 0.5, 1.0)
-    return {"status": "ok", "model": "logistic_regression", "applied_to": "train và đánh giá (cùng bảng pairs đã che)",
+    return {"status": "ok", "models": ["logistic_regression", "lightgbm_ranker"],
+            "applied_to": "train và đánh giá (cùng bảng pairs đã che)", "id_columns": all_id_cols,
+            "id_feature_nonnull_rate_definition": ID_RATE_DEFINITION,
+            "warnings": [warn] if warn else [],
             "levels": levels, "missing_levels": [w for w in wanted if f"{w:g}" not in levels]}
 
 

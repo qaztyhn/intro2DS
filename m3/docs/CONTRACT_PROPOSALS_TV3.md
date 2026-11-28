@@ -91,3 +91,30 @@ bản báo `ValueError` (không có mẫu nào). Test tích hợp của TV3 thê
 `predict_top5` đi từ `queries`. Entry có trong `labels` nhưng không có trong `queries` sẽ không có dòng dự đoán;
 nếu bài thuộc test thì `evaluate_mrr_at_5` báo `ValueError` kèm khóa. Contract không quy định `predict_top5` phải báo sớm.
 Nếu muốn lỗi xuất hiện sớm hơn thì đây là chỗ cần quyết định.
+
+## 9. Đặc trưng hiện tại của TV1 không có cột dùng DOI/url: che url/DOI không đo được gì
+
+Các cột TV1 đang sinh trong `pairs` (kiểm tra trên `candidate-pairing`, `features.py`) chỉ có một cột thuộc nhóm id là
+`arxiv_id_match`. Không có cột nào dùng DOI hay url của entry. Vì vậy thí nghiệm che url/DOI/arXiv ID (`MaskConfig.fields =
+("url", "doi", "arxiv_id")`) chỉ tác động được lên arXiv ID; phần che url và DOI không làm thay đổi đặc trưng nào, dù
+`MaskConfig` có che các trường này.
+
+`run_experiments` đã ghi nhận điều này trong `experiments.json`, mục `mask`:
+- `id_columns`: các cột nhóm id có trong bảng pairs đã che; `levels[...].id_columns_used_by_logistic_regression`;
+- `levels[...].id_feature_nonnull_rate` cho bài train và bài test (tử số, mẫu số, tỉ lệ), và mức che 1.0 mà vẫn còn giá trị
+  khác null ở cột nhóm id thì `run_experiments` ném `ValueError` kèm tên cột;
+- `warnings`: khi nhóm id thiếu cột cho DOI hoặc url, ví dụ "nhóm id chỉ gồm ['arxiv_id_match']: thí nghiệm che chỉ tác động
+  lên arXiv ID, không tác động lên DOI/url".
+
+**Đề xuất cho TV1**: thêm hai cột đặc trưng vào `pairs`, cả hai phải chịu `MaskConfig` (che theo cùng quyết định băm
+`(arxiv_id, citation_key, seed)` của entry):
+
+1. `doi_match` (bool, nullable): DOI của entry sau chuẩn hóa trùng DOI của reference; null nếu entry không có DOI hoặc
+   `references` không có DOI cho ứng viên đó. Bị che thì null.
+2. `url_has_arxiv_id` (bool, nullable): url hoặc eprint của entry chứa đúng `ref_arxiv_id` sau `normalize_arxiv_id`; null nếu
+   entry không có url/eprint. Bị che thì null.
+
+Tên cột chứa `doi` / `url` / `arxiv_id` sẽ tự rơi vào nhóm id của ablation và của kiểm tra che (xem mục 4). Khi hai cột này
+có mặt, cảnh báo trên tự biến mất và thí nghiệm che đo được tác động của cả ba loại trường.
+
+Chưa có số liệu nào đo được trên dữ liệu thật cho mục này; mọi con số trong các test là dữ liệu tổng hợp.

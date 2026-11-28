@@ -129,7 +129,15 @@ def test_t3_8_json_has_all_sections(result, design, tmp_path):
     # mask 0/25/50/100%
     mk = r["mask"]
     assert mk["status"] == "ok" and set(mk["levels"]) == {"0", "0.25", "0.5", "1"} and mk["missing_levels"] == []
-    assert "arxiv_id_match" not in mk["levels"]["1"]["features"]          # che 100% -> cột toàn null bị bỏ
+    for lvl in mk["levels"].values():                                     # mỗi mức che chạy cả LR lẫn LGBM
+        for name in ("logistic_regression", "lightgbm_ranker"):
+            m = lvl[name]
+            assert 0 <= m["valid"]["mrr_at_5"] <= 1 and 0 <= m["test"]["mrr_at_5"] <= 1
+            assert m["test"]["ci95"]["low"] <= m["test"]["ci95"]["high"] and set(m["test"]["by_member"]) == set(MEMBERS)
+            assert m["selection"]["grid"] and m["hyperparameters"]
+    assert mk["models"] == ["logistic_regression", "lightgbm_ranker"]
+    for name in ("logistic_regression", "lightgbm_ranker"):
+        assert "arxiv_id_match" not in mk["levels"]["1"][name]["features"]    # che 100% -> cột toàn null bị bỏ
     # phân bố ứng viên của bài test
     cd = r["candidate_distribution"]
     assert cd["papers"] == 4 and cd["min"] <= cd["median"] <= cd["max"] and sum(cd["histogram"].values()) == 4
@@ -279,3 +287,86 @@ def test_pool_and_member_mrr_consistent_with_evaluate(design, result):
     assert (t["mrr_at_5"], t["entries"], t["manual"]["mrr_at_5"], t["manual"]["entries"], t["auto"]["mrr_at_5"],
             t["auto"]["entries"]) == (res.mrr_at_5, res.evaluated_entries, res.manual_mrr_at_5, res.manual_entries,
                                       res.auto_mrr_at_5, res.auto_entries)
+
+
+# ------------------------------------------------------------------ che có tác dụng thật
+def _hand_rate(d, part, cols=("arxiv_id_match", "doi_match"), table=None):
+    table = table if table is not None else d["pairs"]
+    papers = {r["arxiv_id"] for r in d["splits"].to_pylist() if r["partition"] == part}
+    rows = [r for r in table.to_pylist() if r["arxiv_id"] in papers]
+    hit = sum(1 for r in rows if any(r[c] is not None for c in cols))
+    return hit, len(rows)
+
+
+def test_id_feature_nonnull_rate_matches_hand_count_and_falls_to_zero(design, result):
+    _, r = result
+    mk = r["mask"]
+    assert set(mk["id_columns"]) == {"arxiv_id_match", "doi_match"} and "tử số" in mk["id_feature_nonnull_rate_definition"]
+    masked = masked_versions(design["pairs"])
+    rates = {}
+    for frac, table in masked.items():
+        lvl = mk["levels"][f"{frac:g}"]
+        assert set(lvl["id_columns"]) == {"arxiv_id_match", "doi_match"}
+        assert set(lvl["id_columns_used_by_logistic_regression"]) <= set(lvl["id_columns"])
+        for part in ("train", "test"):
+            hit, n = _hand_rate(design, part, table=table)
+            got = lvl["id_feature_nonnull_rate"][part]
+            assert (got["rows_with_nonnull_id"], got["rows"]) == (hit, n) and got["rate"] == hit / n
+        rates[frac] = lvl["id_feature_nonnull_rate"]["train"]["rate"]
+    assert rates[0.0] > rates[0.25] > rates[0.5] > rates[1.0] == 0.0          # mức che càng cao, đặc trưng id càng ít
+    assert mk["levels"]["1"]["id_columns_used_by_logistic_regression"] == []  # cột id bị bỏ vì toàn null
+
+
+def test_full_mask_with_remaining_id_values_raises_naming_columns(design, tmp_path):
+    bad = {0.0: design["pairs"], 1.0: design["pairs"]}                          # "che 100%" nhưng chưa che gì
+    with pytest.raises(ValueError, match=r"mức che 1.*arxiv_id_match") as e:
+        run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                        output_dir=tmp_path, masked_pairs=bad)
+    assert "doi_match" in str(e.value) and "train" in str(e.value) and "test" in str(e.value)
+    assert not (tmp_path / "experiments.json").exists()
+
+
+def test_full_mask_leak_only_in_test_papers_also_raises(design, tmp_path):
+    full = masked_versions(design["pairs"], fractions=(1.0,))[1.0]
+    test_papers = {r["arxiv_id"] for r in design["splits"].to_pylist() if r["partition"] == "test"}
+    rows = full.to_pylist()
+    for r in rows:
+        if r["arxiv_id"] in test_papers:
+            r["doi_match"] = True
+    leaky = pa.Table.from_pylist(rows, schema=full.schema)
+    with pytest.raises(ValueError, match="doi_match"):
+        run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                        output_dir=tmp_path, masked_pairs={1.0: leaky})
+
+
+def test_warning_when_id_group_misses_doi_or_url(result):
+    _, r = result
+    (w,) = r["mask"]["warnings"]                                                # design có arxiv_id_match + doi_match
+    assert "arxiv_id_match" in w and "doi_match" in w and "không tác động lên url" in w and "arXiv ID/DOI" in w
+
+
+def test_warning_when_id_group_has_only_arxiv_id_match(design, tmp_path):
+    only_arxiv = {f: t.drop(["doi_match"]) for f, t in masked_versions(design["pairs"]).items()}
+    r = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                                   output_dir=tmp_path, masked_pairs=only_arxiv).read_text())
+    assert r["mask"]["id_columns"] == ["arxiv_id_match"]
+    assert r["mask"]["warnings"] == ["nhóm id chỉ gồm ['arxiv_id_match']: thí nghiệm che chỉ tác động lên arXiv ID, "
+                                     "không tác động lên DOI/url"]
+
+
+def test_warning_when_no_id_columns_and_no_warning_when_all_three_present(design, tmp_path):
+    none = {f: t.drop(["arxiv_id_match", "doi_match"]) for f, t in masked_versions(design["pairs"]).items()}
+    r = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                                   output_dir=tmp_path / "n", masked_pairs=none).read_text())
+    assert r["mask"]["id_columns"] == [] and "không có cột nhóm id" in r["mask"]["warnings"][0]
+    assert r["mask"]["levels"]["1"]["id_feature_nonnull_rate"]["train"]["rate"] == 0.0
+    assert ex._id_coverage_warning(["arxiv_id_match", "doi_match", "url_has_arxiv_id"]) is None
+
+
+def test_nan_counts_as_null_in_id_rate():
+    t = pa.table({"arxiv_id": ["a", "a", "a"], "citation_key": ["k"] * 3, "ref_arxiv_id": ["r1", "r2", "r3"],
+                  "arxiv_id_match": pa.array([None, None, True], pa.bool_()),
+                  "doi_score": pa.array([float("nan"), None, 0.0], pa.float64())})
+    got = ex.id_nonnull_rate(t, {"a"}, ["arxiv_id_match", "doi_score"])
+    assert (got["rows_with_nonnull_id"], got["rows"], got["columns_with_values"]) == (1, 3, ["arxiv_id_match", "doi_score"])
+    assert ex.id_nonnull_rate(t, {"a"}, ["doi_score"])["rows_with_nonnull_id"] == 1      # chỉ dòng 0.0; NaN và null là null
