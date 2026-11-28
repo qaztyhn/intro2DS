@@ -287,16 +287,10 @@ def id_nonnull_rate(table: pa.Table, papers: set[str], cols: list[str]) -> dict:
 
 
 def _id_coverage_warning(cols: list[str]) -> str | None:
-    kinds = {"arXiv ID": [c for c in cols if "arxiv_id" in c.lower()], "DOI": [c for c in cols if "doi" in c.lower()],
-             "url": [c for c in cols if "url" in c.lower()]}
-    covered = [k for k, v in kinds.items() if v]
-    missing = [k for k, v in kinds.items() if not v]
-    if not missing:
+    """Chỉ cảnh báo khi pairs không có cột nhóm id nào (che không tác động lên đặc trưng nào)."""
+    if cols:
         return None
-    if not cols:
-        return "pairs không có cột nhóm id: thí nghiệm che không tác động lên đặc trưng nào"
-    return (f"nhóm id chỉ gồm {cols}: thí nghiệm che chỉ tác động lên {'/'.join(covered) or 'không loại nào'}, "
-            f"không tác động lên {'/'.join(missing)}")
+    return "pairs không có cột nhóm id: thí nghiệm che không tác động lên đặc trưng nào"
 
 
 def _mask(ctx: _Context, masked_pairs, seed: int) -> dict:
@@ -355,6 +349,31 @@ def _candidate_distribution(ctx: _Context, pairs: pa.Table) -> dict:
             "histogram": hist, "per_paper": counts}
 
 
+ARXIV_SIGNAL_DEFINITION = (
+    "mẫu số = số entry có nhãn của bài partition test (kể cả entry không có dòng pairs nào); tính trên bảng pairs gốc, không che. "
+    "extracted: entry có ít nhất một cặp (entry, ứng viên) với arxiv_id_match khác null; "
+    "hit: entry có ít nhất một cặp với arxiv_id_match == True")
+
+
+def _arxiv_signal(ctx: _Context, pairs: pa.Table) -> dict:
+    """Hai tỉ lệ theo entry giải thích vì sao baseline có thể gần 1.0 và vì sao MRR giảm khi che."""
+    if "arxiv_id_match" not in pairs.schema.names:
+        return {"status": "skipped", "reason": "pairs không có cột arxiv_id_match"}
+    seen: dict[tuple, bool] = {}                     # entry -> có cặp True; có mặt trong dict = có cặp khác null
+    for a, k, v in zip(pairs.column("arxiv_id").to_pylist(), pairs.column("citation_key").to_pylist(),
+                       pairs.column("arxiv_id_match").to_pylist()):
+        if v is not None:
+            seen[(a, k)] = seen.get((a, k), False) or bool(v)
+    q = {(r["arxiv_id"], r["citation_key"]) for r in ctx.labels_in["test"].to_pylist()}
+    n = len(q)
+    extracted = sum(1 for e in q if e in seen)
+    hit = sum(1 for e in q if seen.get(e))
+    block = lambda num: {"numerator": num, "denominator": n, "rate": num / n if n else None}
+    return {"entries_with_extracted_arxiv_id_rate": block(extracted),
+            "entries_with_arxiv_id_hit_rate": block(hit),
+            "arxiv_id_signal_definition": ARXIV_SIGNAL_DEFINITION}
+
+
 def _random_baseline(ctx: _Context, pairs: pa.Table) -> dict:
     n_of: dict[tuple, int] = {}
     for a, k in zip(pairs.column("arxiv_id").to_pylist(), pairs.column("citation_key").to_pylist()):
@@ -410,7 +429,7 @@ def run_experiments(*, pairs: pa.Table, labels: pa.Table, splits: pa.Table, seed
                      "run_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")},
         "data_summary": _data_summary(ctx),
         "random_baseline": _random_baseline(ctx, pairs),
-        "candidate_distribution": _candidate_distribution(ctx, pairs),
+        "candidate_distribution": {**_candidate_distribution(ctx, pairs), **_arxiv_signal(ctx, pairs)},
         **exps,
     }
     out_dir = Path(output_dir)

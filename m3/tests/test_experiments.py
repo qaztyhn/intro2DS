@@ -339,19 +339,14 @@ def test_full_mask_leak_only_in_test_papers_also_raises(design, tmp_path):
                         output_dir=tmp_path, masked_pairs={1.0: leaky})
 
 
-def test_warning_when_id_group_misses_doi_or_url(result):
+def test_no_warning_when_id_group_has_columns_even_if_only_arxiv_id_match(design, tmp_path, result):
     _, r = result
-    (w,) = r["mask"]["warnings"]                                                # design có arxiv_id_match + doi_match
-    assert "arxiv_id_match" in w and "doi_match" in w and "không tác động lên url" in w and "arXiv ID/DOI" in w
-
-
-def test_warning_when_id_group_has_only_arxiv_id_match(design, tmp_path):
+    assert r["mask"]["warnings"] == []                                         # design có arxiv_id_match + doi_match
     only_arxiv = {f: t.drop(["doi_match"]) for f, t in masked_versions(design["pairs"]).items()}
-    r = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
-                                   output_dir=tmp_path, masked_pairs=only_arxiv).read_text())
-    assert r["mask"]["id_columns"] == ["arxiv_id_match"]
-    assert r["mask"]["warnings"] == ["nhóm id chỉ gồm ['arxiv_id_match']: thí nghiệm che chỉ tác động lên arXiv ID, "
-                                     "không tác động lên DOI/url"]
+    r2 = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                                    output_dir=tmp_path, masked_pairs=only_arxiv).read_text())
+    assert r2["mask"]["id_columns"] == ["arxiv_id_match"] and r2["mask"]["warnings"] == []   # một cột id là đủ
+    assert r2["mask"]["levels"]["1"]["id_feature_nonnull_rate"]["train"]["rate"] == 0.0       # ValueError vẫn canh mức 1.0
 
 
 def test_warning_when_no_id_columns_and_no_warning_when_all_three_present(design, tmp_path):
@@ -360,7 +355,7 @@ def test_warning_when_no_id_columns_and_no_warning_when_all_three_present(design
                                    output_dir=tmp_path / "n", masked_pairs=none).read_text())
     assert r["mask"]["id_columns"] == [] and "không có cột nhóm id" in r["mask"]["warnings"][0]
     assert r["mask"]["levels"]["1"]["id_feature_nonnull_rate"]["train"]["rate"] == 0.0
-    assert ex._id_coverage_warning(["arxiv_id_match", "doi_match", "url_has_arxiv_id"]) is None
+    assert ex._id_coverage_warning(["arxiv_id_match"]) is None and ex._id_coverage_warning([]) is not None
 
 
 def test_nan_counts_as_null_in_id_rate():
@@ -370,3 +365,61 @@ def test_nan_counts_as_null_in_id_rate():
     got = ex.id_nonnull_rate(t, {"a"}, ["arxiv_id_match", "doi_score"])
     assert (got["rows_with_nonnull_id"], got["rows"], got["columns_with_values"]) == (1, 3, ["arxiv_id_match", "doi_score"])
     assert ex.id_nonnull_rate(t, {"a"}, ["doi_score"])["rows_with_nonnull_id"] == 1      # chỉ dòng 0.0; NaN và null là null
+
+
+# ------------------------------------------------------------------ tín hiệu arXiv ID theo entry (mục g)
+def _signal_data():
+    """Dữ liệu tính tay. Bài test T: e1 (null, null), e2 (False, True), e3 (False, null), e4 (có nhãn, không có dòng pairs),
+    e5 (KHÔNG có nhãn, có True). Bài valid V có một entry True (không được tính vào test)."""
+    T, V = "2507.00001", "2507.00002"
+    def row(a, k, r, v):
+        return {"arxiv_id": a, "citation_key": k, "ref_arxiv_id": r, "arxiv_id_match": v}
+    pairs = make_table("pairs", [
+        row(T, "e1", "r1", None), row(T, "e1", "r2", None),
+        row(T, "e2", "r1", False), row(T, "e2", "r2", True),
+        row(T, "e3", "r1", False), row(T, "e3", "r2", None),
+        row(T, "e5", "r1", True),
+        row(V, "v1", "r1", True)])
+    lab = lambda a, k: {"arxiv_id": a, "citation_key": k, "groundtruth_arxiv_id": "r1", "label_source": "manual", "member_id": "m1"}
+    labels = make_table("labels", [lab(T, k) for k in ("e1", "e2", "e3", "e4")] + [lab(V, "v1")])
+    splits = make_table("splits", [{"arxiv_id": T, "partition": "test"}, {"arxiv_id": V, "partition": "valid"}])
+    return pairs, labels, splits
+
+
+def test_arxiv_signal_by_hand():
+    pairs, labels, splits = _signal_data()
+    sig = ex._arxiv_signal(ex._Context(labels, splits), pairs)
+    assert sig["entries_with_extracted_arxiv_id_rate"] == {"numerator": 2, "denominator": 4, "rate": 0.5}   # e2, e3
+    assert sig["entries_with_arxiv_id_hit_rate"] == {"numerator": 1, "denominator": 4, "rate": 0.25}        # e2
+    assert "mẫu số" in sig["arxiv_id_signal_definition"] and "== True" in sig["arxiv_id_signal_definition"]
+
+
+def test_arxiv_signal_skipped_without_column():
+    pairs, labels, splits = _signal_data()
+    sig = ex._arxiv_signal(ex._Context(labels, splits), pairs.drop(["arxiv_id_match"]))
+    assert sig["status"] == "skipped" and "arxiv_id_match" in sig["reason"]
+
+
+def test_arxiv_signal_in_candidate_distribution_matches_hand_count(design, result):
+    _, r = result
+    cd = r["candidate_distribution"]
+    test_papers = {s["arxiv_id"] for s in design["splits"].to_pylist() if s["partition"] == "test"}
+    q = {(l["arxiv_id"], l["citation_key"]) for l in design["labels"].to_pylist() if l["arxiv_id"] in test_papers}
+    vals: dict[tuple, list] = {}
+    for p in design["pairs"].to_pylist():
+        vals.setdefault((p["arxiv_id"], p["citation_key"]), []).append(p["arxiv_id_match"])
+    extracted = sum(1 for e in q if any(v is not None for v in vals.get(e, [])))
+    hit = sum(1 for e in q if any(v is True for v in vals.get(e, [])))
+    assert 0 < hit <= extracted <= len(q)                                          # dữ liệu có cả entry có và không có ID
+    assert cd["entries_with_extracted_arxiv_id_rate"] == {"numerator": extracted, "denominator": len(q), "rate": extracted / len(q)}
+    assert cd["entries_with_arxiv_id_hit_rate"] == {"numerator": hit, "denominator": len(q), "rate": hit / len(q)}
+    assert cd["papers"] == 4 and "histogram" in cd                                 # các trường cũ của (g) vẫn còn
+
+
+def test_arxiv_signal_uses_unmasked_pairs(design, tmp_path):
+    r = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                                   output_dir=tmp_path, masked_pairs=masked_versions(design["pairs"])).read_text())
+    full = r["candidate_distribution"]["entries_with_extracted_arxiv_id_rate"]["numerator"]
+    nomask = json.loads(run_experiments(pairs=design["pairs"], labels=design["labels"], splits=design["splits"], seed=1,
+                                        output_dir=tmp_path / "n").read_text())
+    assert nomask["candidate_distribution"]["entries_with_extracted_arxiv_id_rate"]["numerator"] == full

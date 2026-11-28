@@ -89,7 +89,7 @@ Ghi vào một thư mục tạm cạnh `output_dir` rồi đổi tên, nên lỗ
 | `ablation` | (d) Bỏ lần lượt từng nhóm đặc trưng khỏi LR (giữ `C` đã chọn ở `logistic_regression`, không tune lại). |
 | `mask` | (e) Che url/DOI/arXiv ID ở 0/25/50/100% — xem mục 4. |
 | `random_baseline` | MRR kỳ vọng của xếp hạng ngẫu nhiên (mốc sàn). |
-| `candidate_distribution` | (g) Số ứng viên của các bài test. |
+| `candidate_distribution` | (g) Số ứng viên của các bài test, cộng hai tỉ lệ tín hiệu arXiv ID theo entry (mục 3). |
 | MRR theo pool và thành viên + CI | (f) Nằm trong khối `test` của **mỗi** thí nghiệm. |
 
 - **Nhóm đặc trưng (ablation, kiểm tra che).** Suy từ tên cột, ánh xạ cột → nhóm ghi trong `ablation.feature_groups`:
@@ -101,6 +101,13 @@ Ghi vào một thư mục tạm cạnh `output_dir` rồi đổi tên, nên lỗ
 - **Phân bố ứng viên.** Phạm vi: bài partition `test`; số ứng viên của một bài = số `ref_arxiv_id` khác nhau trong `pairs`
   của bài. Gồm `min`, `median`, `max`, `histogram` (các khoảng 0, 1-5, 6-10, 11-20, 21-50, 51-100, 101-200, 201-500, 501+),
   và `per_paper`.
+- **Tín hiệu arXiv ID theo entry** (cùng khối `candidate_distribution`; tính trên bảng `pairs` gốc, không che; mẫu số là
+  số entry **có nhãn** của bài test, kể cả entry không có dòng pairs nào). Mỗi tỉ lệ ghi `numerator`, `denominator`, `rate` và
+  định nghĩa ở `arxiv_id_signal_definition`:
+  - `entries_with_extracted_arxiv_id_rate`: entry có ít nhất một cặp `arxiv_id_match` khác null (trích được arXiv ID);
+  - `entries_with_arxiv_id_hit_rate`: entry có ít nhất một cặp `arxiv_id_match == True` (arXiv ID trùng một ứng viên).
+  Tỉ lệ cao nghĩa là phần lớn entry có sẵn đáp án qua ID, nên baseline tiêu đề và model đều dễ gần 1.0; che sẽ lấy đi đúng tín hiệu
+  này, nên MRR giảm theo mức che. Nếu `pairs` không có cột `arxiv_id_match` thì ghi `status: skipped`.
 - `data_summary` đếm bài và entry có nhãn theo partition và pool, để biết mẫu đánh giá lớn cỡ nào.
 
 ## 4. Thí nghiệm che và kiểm tra che có tác dụng
@@ -117,11 +124,14 @@ vì model fit và dự đoán trên cùng bảng đã che.
   khác null; NaN coi là null), `rows` (mẫu số: tổng số dòng pairs của các bài thuộc partition đó) và `rate` = tử số / mẫu số.
 - **Ở mức 1.0, nếu tỉ lệ khác 0 thì `run_experiments` ném `ValueError` kèm tên cột** (che 100% mà vẫn còn giá trị nghĩa là che
   không có tác dụng).
-- `mask.warnings`: nếu nhóm id thiếu đặc trưng cho DOI hoặc url. Với đặc trưng hiện tại của TV1, nhóm id chỉ có `arxiv_id_match`,
-  nên cảnh báo là: *nhóm id chỉ gồm ['arxiv_id_match']: thí nghiệm che chỉ tác động lên arXiv ID, không tác động lên DOI/url*.
+- `mask.warnings`: chỉ có cảnh báo khi `pairs` không có cột nhóm id nào (khi đó che không tác động lên đặc trưng nào).
 
-**Giới hạn:** chừng nào `pairs` chưa có cột dùng DOI hay url (`doi_match`, `url_has_arxiv_id` — đề xuất ở mục 9 của
-`CONTRACT_PROPOSALS_TV3.md`), thí nghiệm che url/DOI không đo được gì; kết quả che chỉ nói về sự phụ thuộc vào arXiv ID.
+**Giới hạn:** `arxiv_id_match` (TV1) trích arXiv ID từ url, DOI dạng 10.48550 và journal. Với `MaskConfig` mặc định, entry bị che
+mất toàn bộ tín hiệu arXiv ID (`arxiv_id_match = null`, không phân biệt được với entry vốn không có ID). Vì vậy thí nghiệm đo MRR
+khi model chỉ còn tiêu đề, tác giả, năm. DOI của tạp chí không dùng được vì references không có DOI.
+
+Hai tỉ lệ ở `candidate_distribution` cho biết tín hiệu này có mặt nhiều đến đâu, nên nên đọc cùng kết quả che (mục 3).
+
 
 ## 5. Đọc `experiments.json` và `metrics.json`
 
@@ -164,15 +174,17 @@ Các con số này do dữ liệu giả lập do chính test sinh ra, **không c
 ## 7. Lưu ý khi phân tích kết quả thật
 
 1. **Baseline tiêu đề có thể ≈ 1.0.** Entry BibTeX thường có sẵn tiêu đề (và url/ID/DOI) khớp reference, nên xếp theo
-   `title_similarity` đã gần đúng hết. Khi đó model không thể hiện lợi thế rõ trên MRR chung, và hai phân tích quan trọng hơn là
-   **thí nghiệm che** (model còn đúng khi mất url/DOI/ID?) và **ablation** (đặc trưng nào thực sự cần?). Luôn so với `random_baseline`.
+   `title_similarity` đã gần đúng hết (hai tỉ lệ tín hiệu arXiv ID ở mục 3 cho biết mức độ). Khi đó model không thể hiện lợi thế rõ trên MRR chung, và hai phân tích quan trọng hơn là
+   **thí nghiệm che** (model còn đúng khi mất tín hiệu arXiv ID?) và **ablation** (đặc trưng nào thực sự cần?). Luôn so với `random_baseline`.
 2. **Test chỉ khoảng 8 paper**, mẫu đánh giá chỉ vài chục entry, nên phương sai lớn và CI rộng. Bootstrap ở mức entry bỏ qua việc
    các entry trong cùng một bài tương quan nhau, nên CI **thực tế có thể còn rộng hơn** con số báo cáo. Chênh lệch giữa các model
    nhỏ hơn bề rộng CI thì không nên diễn giải là khác biệt thật.
 3. **MRR trên bài gán tay đáng tin hơn bài tự động.** Luật gán nhãn tự động dùng đặc trưng tương tự đặc trưng của model, nên
    MRR trên nhãn tự động có thể cao do tính vòng tròn. Báo cáo ưu tiên `test.manual`; `test.auto` chỉ để tham khảo. Mỗi nhóm cũng có ít
    entry hơn tổng.
-4. **Thí nghiệm che bị giới hạn bởi đặc trưng có sẵn** (mục 4): không có cột DOI/url thì chỉ đo được tác động của arXiv ID.
+4. **Thí nghiệm che đo MRR khi model chỉ còn tiêu đề, tác giả, năm.** Entry bị che có `arxiv_id_match = null`, không phân biệt
+   được với entry vốn không có ID; DOI của tạp chí không dùng được vì references không có DOI (mục 4). MRR giảm khi che càng nhiều
+   là do mất tín hiệu arXiv ID (xem `entries_with_extracted_arxiv_id_rate`), không phải do mất url/DOI riêng lẻ.
 5. **Hòa điểm.** Khi nhiều ứng viên cùng điểm, `ref_arxiv_id` nhỏ hơn đứng trước. Điều này có thể làm MRR hơi cao hoặc thấp một cách
    hệ thống nếu đặc trưng không phân biệt được các ứng viên; `candidate_distribution` và `random_baseline` giúp nhìn ra.
 6. **Ablation giữ nguyên `C`** đã chọn cho mô hình đầy đủ và không tune lại; chênh lệch nhỏ có thể do chưa tune.
