@@ -2,6 +2,7 @@
 import re
 
 _IMPACT = {
+    "ROOT_FROM_DERIVED_ASSET": "affects_output",
     "BIBITEM_REPEATED_AUTHOR_UNRESOLVED": "affects_output",
     "BIBITEM_YEAR_UNRESOLVED": "affects_output",
     "BIB_SOURCE_CONFLICT": "affects_output",

@@ -349,3 +349,71 @@ def test_two_root_bbl_paths_are_ambiguous(tmp_path):
     assert result.status == "partial"
     assert not result.bib_files
     assert any("AMBIGUOUS_BBL_RESOURCE" in w for w in result.warnings)
+
+
+def write_asset_audit(item, pairs):
+    import json
+    from m1.src.stages.source_assets import POLICY
+
+    records = [dict(original=original, derived=derived, conversion=conversion)
+               for original, derived, conversion in pairs]
+    path = item.source_dir.parent / 'source_assets_audit.json'
+    path.write_text(json.dumps(dict(policy=POLICY, arxiv_id=item.arxiv_id, version=item.version,
+                                    records=records)), encoding='utf-8')
+    return path
+
+
+@pytest.mark.parametrize('extension', ['ltx', 'latex'])
+def test_document_suffix_in_audit_determines_eligibility(tmp_path, extension):
+    original = 'paper.' + extension
+    name = original + '.tex'
+    item = source(tmp_path, {name: r'\documentclass{article}\input{rogue}',
+                             'rogue.tex': r'\documentclass{article}Support body.'})
+    write_asset_audit(item, [(original, name, 'text_asset_to_tex'),
+                             ('rogue.sty', 'rogue.tex', 'text_asset_to_tex')])
+    doc = module.gather_source(item)
+    assert (doc.root_file, doc.status, doc.warnings) == (name, 'ok', [])
+    assert 'Support body.' in doc.latex
+
+
+@pytest.mark.parametrize('name', ['macros.tex', 'genuine.sty.tex'])
+def test_native_documentclass_remains_a_root_with_or_without_audit(tmp_path, name):
+    item = source(tmp_path, {n: r'\documentclass{article}' for n in ('main.tex', name)})
+    for audited in (False, True):
+        if audited:
+            write_asset_audit(item, [(n, n, 'unchanged') for n in item.source_files])
+        doc = module.gather_source(item)
+        assert doc.status == 'failed' and any('AMBIGUOUS_ROOT' in w for w in doc.warnings)
+
+
+def test_derived_document_fallback_requires_an_active_root(tmp_path):
+    item = source(tmp_path, {'snippet.tex': 'Just a fragment.',
+                             'paper.inc.tex': r'\documentclass{article}\begin{document}Body.\end{document}'})
+    legacy = module.gather_source(item)
+    assert (legacy.root_file, legacy.status) == ('paper.inc.tex', 'ok')
+    write_asset_audit(item, [('snippet.tex', 'snippet.tex', 'unchanged'),
+                             ('paper.inc', 'paper.inc.tex', 'text_asset_to_tex')])
+    doc = module.gather_source(item)
+    assert (doc.root_file, doc.status) == ('paper.inc.tex', 'partial')
+    assert any('stage=gather ROOT_FROM_DERIVED_ASSET:' in w for w in doc.warnings)
+    (item.source_dir / 'paper.inc.tex').write_text('Another fragment.')
+    doc = module.gather_source(item)
+    assert doc.status == 'failed' and any('NO_ROOT' in w for w in doc.warnings)
+
+
+def test_derived_fallback_keeps_independent_roots_ambiguous(tmp_path):
+    files = {'one.inc.tex': r'\documentclass{article}', 'two.txt.tex': r'\documentclass{book}'}
+    item = source(tmp_path, files)
+    write_asset_audit(item, [(n.removesuffix('.tex'), n, 'text_asset_to_tex') for n in files])
+    doc = module.gather_source(item)
+    assert (doc.status, doc.root_file) == ('failed', None)
+    assert any('AMBIGUOUS_ROOT:' in w for w in doc.warnings)
+    assert any('ROOT_FROM_DERIVED_ASSET:' in w for w in doc.warnings)
+
+
+def test_incomplete_preserve_audit_reports_version_error(tmp_path):
+    item = source(tmp_path, {'main.tex': r'\documentclass{article}'})
+    write_asset_audit(item, [])
+    doc = module.gather_source(item)
+    assert doc.status == 'failed'
+    assert any(f'{item.arxiv_id}v1 stage=gather INVALID_SOURCE_ASSET_AUDIT:' in w for w in doc.warnings)

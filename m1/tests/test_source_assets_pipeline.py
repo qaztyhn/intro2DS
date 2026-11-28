@@ -175,3 +175,28 @@ def test_inventory_records_malformed_manifest_without_losing_other_versions(tmp_
     assert report['summary']['versions']==1
     assert 'missing_or_invalid_source_audit' in report['retry_plan'][0]['review_reasons']
     assert report['versions'][0]['audit_error']=='manifest must be an object'
+
+
+@pytest.mark.parametrize(('directive', 'status', 'included'), [
+    (r'\input{rogue.sty}', 'ok', True),
+    (r'\input{rogue}', 'partial', False),
+    ('', 'ok', False),
+])
+def test_support_documentclass_is_only_read_as_an_input(tmp_path, directive, status, included):
+    from m2.src.parsing.gathering import gather_source
+    from m2.src.parsing.m1_adapter import load_versions
+
+    main = r'\documentclass{article}\begin{document}Main. ' + directive + r'\end{document}'
+    cfg, _, _ = setup(tmp_path, {'main.tex': main.encode(),
+                                 'rogue.sty': br'\documentclass{article}Support marker.'})
+    extract_version(cfg, IDENTITY, 1)
+    run = tmp_path / 'offline'
+    version, = load_versions(run, IDENTITY)
+    doc = gather_source(version)
+    assert doc.root_file == 'main.tex'
+    assert ('rogue.sty.tex' in doc.included_files) == included
+    result = process_publication_detailed(run, IDENTITY)
+    row, = result.version_status
+    assert row['status'] == status
+    assert ('MISSING_DEPENDENCY' in row['partial_reasons']) == (directive == r'\input{rogue}')
+    assert any('Support marker' in r['content'] for r in result.elements) == included

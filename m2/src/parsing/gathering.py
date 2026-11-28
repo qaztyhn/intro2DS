@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from m1.src.schema import no_symlinks, relative_path, require_arxiv_id, require_version
 from m1.src.compilation import MAX_COMPILATION_BYTES, compilation_record
+from m1.src.stages.source_assets import POLICY as PRESERVE_POLICY
 from .contracts import GatheredDocument, SourceVersion
 
 MAX_FILE_BYTES = 64 * 2**20
@@ -738,6 +739,68 @@ class Context:
         return ''.join(pieces)
 
 
+def _document_assets(audit, source):
+    """Return derived paths of original document sources, or None for another policy."""
+    if not isinstance(audit, dict):
+        raise ValueError('expected an audit object')
+    if audit.get('policy') != PRESERVE_POLICY:
+        return None
+    if (audit.get('arxiv_id') != source.arxiv_id or type(audit.get('version')) is not int
+            or audit['version'] != source.version):
+        raise ValueError('audit identity differs from source version')
+    if not isinstance(audit.get('records'), list):
+        raise ValueError('expected conversion records')
+    documents = set()
+    derived_paths = set()
+    for record in audit['records']:
+        if not isinstance(record, dict):
+            raise ValueError('invalid conversion record')
+        if 'derived' not in record:
+            continue  # Metadata-only assets and unsuccessful conversions have no output.
+        derived = relative_path(record['derived'])
+        original = relative_path(record.get('original'))
+        if derived in derived_paths:
+            raise ValueError(f'duplicate derived path: {derived}')
+        derived_paths.add(derived)
+        if PurePosixPath(original).suffix.lower() in {'.tex', '.ltx', '.latex'}:
+            documents.add(derived)
+    missing = sorted(set(source.source_files) - derived_paths)
+    if missing:
+        raise ValueError(f'manifest file absent from audit records: {missing[0]}')
+    return documents
+
+
+def _load_document_assets(context):
+    path = context.base.parent / 'source_assets_audit.json'
+    try:
+        no_symlinks(path)
+        with path.open('rb') as handle:
+            raw = handle.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            raise ValueError('source asset audit exceeds size limit')
+        return _document_assets(json.loads(raw), context.source)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise GatheringError('INVALID_SOURCE_ASSET_AUDIT', str(exc)) from exc
+
+
+def _scan_roots(context, names):
+    roots = []
+    for name in sorted(names):
+        try:
+            count = root_count(context.clean(name))
+        except GatheringError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
+        if count > 1:
+            raise GatheringError('MULTIPLE_ROOT_DECLARATIONS', name)
+        if count:
+            roots.append(name)
+    return roots
+
+
 def _gather_source(source: SourceVersion, selected_root=None, root_reviews=None) -> GatheredDocument:
     """Gather one version. included_files is first-visit TeX order, not dedup.
 
@@ -762,16 +825,14 @@ def _gather_source(source: SourceVersion, selected_root=None, root_reviews=None)
         context = Context(source)
         compilation_hint = _compilation_hint(context)
         ignored = set(compilation_hint['ignored']) if compilation_hint else set()
-        roots = []
-        for name in sorted(context.names - ignored):
-            if name.lower().endswith('.tex'):
-                try:
-                    count = root_count(context.clean(name))
-                    if count > 1: raise GatheringError('MULTIPLE_ROOT_DECLARATIONS', name)
-                    if count: roots.append(name)
-                except (OSError, UnicodeError, ValueError) as exc:
-                    if isinstance(exc, GatheringError): raise
-                    raise GatheringError('ROOT_SCAN_INCOMPLETE', name + ': ' + str(exc)) from exc
+        tex_files = {name for name in context.names - ignored if name.lower().endswith('.tex')}
+        documents = _load_document_assets(context)
+        eligible = tex_files if documents is None else tex_files & documents
+        roots = _scan_roots(context, eligible)
+        if not roots and eligible != tex_files:
+            roots = _scan_roots(context, tex_files - eligible)
+            if roots:
+                context.warn('ROOT_FROM_DERIVED_ASSET', detail=', '.join(roots))
         original_roots = roots
         hinted_root = None
         if compilation_hint and len(compilation_hint['toplevels']) == 1:
