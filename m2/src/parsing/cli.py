@@ -79,11 +79,11 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
         root_reviews.sort(key=lambda row: (row['arxiv_id'], row['version']))
         write_json_atomic(tables / 'root_review.json', root_reviews)
         report = {'publications': audit, 'stage_seconds_sum': stages,
-              'bibitem_parse_stats': dict(sorted(bibitem_total.items())),
-              'note': 'Per-stage sums include calls returning a detailed result, even when versions failed. '
-                      'Publication attempts raising before that result are excluded; benchmark wall time includes them.'}
-    (output_dir / label / 'processing_report.json').write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+                'bibitem_parse_stats': dict(sorted(bibitem_total.items())),
+                'note': 'Per-stage sums include calls returning a detailed result, even when versions failed. '
+                        'Publication attempts raising before that result are excluded; benchmark wall time includes them.'}
+        (output_dir / label / 'processing_report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return benchmark, qa
 
 
