@@ -146,3 +146,10 @@ def test_arxiv_number_label_does_not_override_publication_year():
             r'[\href{https://arxiv.org/abs/2004.08668}{{\ttfamily 2004.08668}}].')
     entries, _ = parse_bibitems(text)
     assert normalize_entry(entries[0]).fields['year'] == 2020
+
+
+def test_conflicting_explicit_entry_types_reported_without_changing_native_type():
+    entries, warnings, rows = reconcile('@article{x,title={Study}}', '@book{x,title={Study}}')
+    assert entries[0].entry_type == 'article'
+    assert rows[0]['conflicting_fields'] == ['entry_type']
+    assert any('BIB_SOURCE_CONFLICT' in w for w in warnings)

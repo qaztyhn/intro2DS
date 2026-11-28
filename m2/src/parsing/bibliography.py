@@ -15,6 +15,7 @@ from typing import NamedTuple
 from collections.abc import Callable
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
 from .biblatex_bbl import is_biblatex_bbl, parse_biblatex_bbl, is_empty_bibliography
+from .diagnostics import duplicate_field_warning
 from .amsrefs_bbl import is_amsrefs_bbl, parse_amsrefs_bbl
 
 log = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def _read_fields(
             raise ValueError(f"missing '=' after field '{name}'")
         value, i = _read_value(s, i + 1, strings)
         if name in fields:
-            warnings.append(f"{key}: duplicate field '{name}' ignored (first kept)")
+            warnings.append(duplicate_field_warning(key, name, fields[name], value.strip()))
         else:
             fields[name] = value.strip()
 
@@ -156,12 +157,12 @@ def _recover_fields(text, start, strings, key, close_ch):
             if name not in fields:
                 fields[name] = value.strip()
             else:
-                warnings.append(f'{key}: duplicate field {name!r} ignored during recovery')
+                warnings.append(duplicate_field_warning(key, name, fields[name], value.strip()))
         except ValueError:
-            warnings.append(f'{key}: quarantined malformed field {name!r}')
+            warnings.append(f'BIB_FIELD_QUARANTINED: {key}: quarantined malformed field {name!r}')
     if not fields.get('title') or not any(fields.get(n) for n in ('author', 'year', 'doi')):
         return None, [], end
-    warnings.append(f'{key}: recovered independently valid fields; entry remains partial')
+    warnings.append(f'BIB_ENTRY_RECOVERED: {key}: recovered independently valid fields; entry remains partial')
     return fields, warnings, end
 
 
@@ -200,7 +201,7 @@ def _scan(text: str, strings: dict[str, str], warnings: list[str]) -> list[BibEn
             fields, pos = _read_fields(text, i, close_ch, strings, warnings, key)
             entries.append(BibEntry(original_key=key, entry_type=kind, fields=fields))
         except ValueError as exc:
-            warnings.append(f"malformed @{kind} entry '{key}': {exc}")
+            warnings.append(f"BIB_ENTRY_MALFORMED: malformed @{kind} entry '{key}': {exc}")
             if key and kind not in _SKIP_TYPES and kind != 'string':
                 recovered, details, resume = _recover_fields(text, km.end(), strings, key, close_ch)
                 if recovered is not None:
@@ -244,10 +245,10 @@ def resolve_crossrefs(entries: list[BibEntry]) -> tuple[list[BibEntry], list[str
                 break
             parent = by_key.get(ref)
             if parent is None:
-                warnings.append(f"{e.original_key}: crossref '{ref}' not found")
+                warnings.append(f"BIB_CROSSREF_MISSING: {e.original_key}: crossref '{ref}' not found")
                 break
             if ref in seen:
-                warnings.append(f"{e.original_key}: crossref cycle at '{ref}'")
+                warnings.append(f"BIB_CROSSREF_CYCLE: {e.original_key}: crossref cycle at '{ref}'")
                 break
             seen.add(ref)
             for name, value in parent.fields.items():
@@ -952,7 +953,7 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
     for m in _BIBITEM_CMD.finditer(text):
         head = _bibitem_head(text, m)
         if head is None:
-            warnings.append(f"malformed \\bibitem at offset {m.start()}; skipped")
+            warnings.append(f"BIBITEM_MALFORMED: malformed \\bibitem at offset {m.start()}; skipped")
             malformed_heads.append(m.start())
             continue
         label, key, body_start = head
@@ -972,7 +973,7 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
         if stop:
             body = body[:stop.start()]
         if not key:
-            warnings.append(f"\\bibitem #{idx + 1} has an empty key; skipped")
+            warnings.append(f"BIBITEM_KEY_EMPTY: \\bibitem #{idx + 1} has an empty key; skipped")
             previous_author = previous_explicit_key = None
             previous_start = body_start
             continue
@@ -1205,6 +1206,10 @@ def extract_bibliography_detailed(document: GatheredDocument, *,
                     fallback = normalize_entry(e)
                     decision = _compare_entries(previous, fallback)
                     conflicts = decision['conflicting_fields']
+                    # Printed bibitems receive a synthetic 'misc' type. Compare only explicit types.
+                    if ('raw' not in fallback.fields and 'raw' not in previous.fields
+                            and previous.entry_type != fallback.entry_type):
+                        conflicts.append('entry_type')
                     if conflict_sink is not None:
                         conflict_sink.append(dict(arxiv_id=document.arxiv_id, version=document.version,
                             citation_key=e.original_key, native_source=origins[fold],
@@ -1235,7 +1240,8 @@ def extract_bibliography_detailed(document: GatheredDocument, *,
                           if decision and decision['allow_enrichment'] else 'skipped (first kept)')
                 log.warning("%s stage=bib_parse file=%s: duplicate key '%s' %s; conflicts=%s",
                             tag, path, e.original_key, action, ','.join(conflicts))
-                diagnostics.append(f'{tag} stage=bib_parse file={path}: duplicate key {e.original_key!r} {action}'
+                code = 'BIB_SOURCE_CONFLICT' if conflicts else 'BIB_DUPLICATE_KEY'
+                diagnostics.append(f'{tag} stage=bib_parse file={path}: {code}: duplicate key {e.original_key!r} {action}'
                                    + (f'; conflicting_fields={",".join(conflicts)}' if conflicts else ''))
                 continue
             if fold:

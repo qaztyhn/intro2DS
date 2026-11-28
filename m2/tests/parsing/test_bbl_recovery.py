@@ -172,3 +172,17 @@ def test_conversion_rejects_unbalanced_verbatim_value():
     assert parse_warnings == []
     assert entries[0].fields == {'title': 'Good'}
     assert any('BBL_UNSERIALIZABLE_FIELD' in w for w in warnings)
+
+
+def test_repeated_bbl_scalars_keep_first_and_distinguish_equal_values():
+    from m2.src.parsing.amsrefs_bbl import parse_amsrefs_bbl
+    from m2.src.parsing.diagnostics import diagnostic_codes
+
+    biber, warnings = parse_biblatex_bbl(
+        r'\entry{x}{article}{}\field{year}{2020}\field{year}{2020}\field{year}{2021}\endentry')
+    assert biber[0].fields['year'] == '2020'
+    assert diagnostic_codes(warnings) == (['BIB_DUPLICATE_FIELD_DIFFERENT'], ['BIB_DUPLICATE_FIELD_IDENTICAL'])
+
+    ams, warnings = parse_amsrefs_bbl(r'\bib{x}{article}{year={2020},year={2020},year={2021}}')
+    assert ams[0].fields['year'] == '2020'
+    assert diagnostic_codes(warnings) == (['AMSREFS_DUPLICATE_FIELD'], ['BIB_DUPLICATE_FIELD_IDENTICAL'])

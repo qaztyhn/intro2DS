@@ -10,6 +10,7 @@ import re
 from .biblatex_bbl import (_arguments, _group, _without_comments,
                            _MAX_CHARS, _MAX_ENTRIES, entries_to_bibtex)
 from .contracts import BibEntry
+from .diagnostics import duplicate_field_warning
 
 _BIB = re.compile(r"\\bib(?![A-Za-z@])")
 _FIELD = re.compile(r"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*")
@@ -52,7 +53,9 @@ def _fields(payload: str, key: str) -> tuple[dict[str, str], list[str]]:
             continue
         if name in ('author', 'editor'):
             people.setdefault(name, []).append(value.strip())
-        elif name in result and result[name] != value:
+        elif name in result and result[name] == value:
+            warnings.append(duplicate_field_warning(key, name, result[name], value))
+        elif name in result:
             warnings.append(f'AMSREFS_DUPLICATE_FIELD key={key} field={name}: first kept')
         else:
             result[name] = value

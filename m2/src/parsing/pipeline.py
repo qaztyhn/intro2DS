@@ -8,6 +8,7 @@ from time import perf_counter
 
 from .bibliography import build_key_resolver, cited_keys, extract_bibliography_detailed, unify_bibliography
 from .contracts import GatheredDocument, ParsedDocument
+from .diagnostics import diagnostic_codes
 from .deduplication import deduplicate_with_stats
 from .export import bibtex_rows
 from .gathering import gather_source, gather_source_with_root
@@ -63,13 +64,16 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
             else:
                 doc = measured('gather', gather_source, source)
             if doc.status in {'ok', 'partial'}:
+                # Gathering labels every warning partial. Defer missing-resource impact
+                # until citation resolution, without masking independent hierarchy warnings.
+                if doc.status == 'partial' and doc.warnings and not diagnostic_codes(doc.warnings)[0]:
+                    doc.status = 'ok'
                 issues = load_recovery_warnings(Path(run_dir), arxiv_id, source.version)
                 if issues:
                     messages = [f'{arxiv_id}v{source.version} stage=bibliography '
                                 f'RECOVERY_CONVERSION_WARNING: {issue}' for issue in issues]
                     recovery_diagnostics[source.version] = messages
                     doc.warnings.extend(messages)
-                    doc.status = 'partial'
         except Exception as error:
             LOGGER.exception('%s v%s stage=gather', arxiv_id, source.version)
             doc = GatheredDocument(arxiv_id, source.version, None, '', [], {}, 'failed',
@@ -105,8 +109,10 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                 LOGGER.exception('%s v%s stage=hierarchy', arxiv_id, doc.version)
         if tree is None:
             tree = ParsedDocument(arxiv_id, doc.version, None, 'failed',
-                                  list(doc.warnings) + [f'{error[0]}: {error[1]}'])
+                                  list(doc.warnings) + [f'{arxiv_id}v{doc.version} stage={error[0]} EXCEPTION: {error[1]}'])
         missing = set()
+        diagnostics = bib_diagnostics.get(doc.version, recovery_diagnostics.get(doc.version, []))
+        tree.warnings.extend(w for w in diagnostics if w not in tree.warnings)
         if tree.root is not None:
             resolve_key = build_key_resolver({**{key: key for key in known_keys},
                                              **bibliography.key_mapping.get(doc.version, {})})
@@ -116,21 +122,21 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                 missing.update(key for key in cited_keys(node.content)
                                if resolve_key(key) not in known_keys)
                 pending.extend(node.children)
-            diagnostics = bib_diagnostics.get(doc.version, [])
-            tree.warnings.extend(w for w in diagnostics if w not in tree.warnings)
             if missing:
                 tree.warnings.append(f'{arxiv_id}v{doc.version} stage=bibliography '
                                      'MISSING_CITATION_KEYS: ' + ', '.join(sorted(missing)))
-            if (diagnostics or missing) and tree.status == 'ok':
-                tree.status = 'partial'
+        reasons, info = diagnostic_codes(tree.warnings, missing_keys=bool(missing))
+        if reasons and tree.status == 'ok':
+            tree.status = 'partial'
         parsed.append(tree)
         row = status_row(
             doc, tree, has_tex=any(name.lower().endswith('.tex') for name in source.source_files),
             error=error)
-        row.update(bibliography_parse_warnings=len(bib_diagnostics.get(doc.version, [])),
+        row.update(partial_reasons=reasons, info_diagnostics=info,
+                   bibliography_parse_warnings=len(bib_diagnostics.get(doc.version, [])),
                    missing_citation_keys=sorted(missing), root_selection=choices.get(doc.version),
                    missing_bibliography_resources=[w for w in doc.warnings if ' MISSING_BIB_RESOURCE:' in w])
-        if row['status'] == 'partial' and (bib_diagnostics.get(doc.version) or missing):
+        if row['status'] == 'partial' and (diagnostics or missing):
             row.update(stage='bibliography', reason='MISSING_CITATION_KEYS' if missing else 'BIBLIOGRAPHY_WARNINGS')
         result.version_status.append(row)
         result.warnings.extend(tree.warnings)

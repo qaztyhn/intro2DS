@@ -41,14 +41,23 @@ def corpus(tmp_path, warnings=None, *, converted=False, empty=False):
     return run, path
 
 
-def test_conversion_warning_keeps_version_partial_without_losing_usable_data(tmp_path):
-    run, path = corpus(tmp_path, ['AMSREFS_UNSUPPORTED_FIELD key=x field=book'])
+@pytest.mark.parametrize(("warnings", "reasons", "info"), [
+    (["main.bbl: AMSREFS_UNSUPPORTED_FIELD key=x field=book"], [], ["AMSREFS_UNSUPPORTED_FIELD"]),
+    (["BBL_TRUNCATED_ENTRY key=x"], ["BBL_TRUNCATED_ENTRY"], []),
+    (["AMSREFS_UNSUPPORTED_FIELD key=x field=conference", "BBL_TRUNCATED_ENTRY key=x"],
+     ["BBL_TRUNCATED_ENTRY"], ["AMSREFS_UNSUPPORTED_FIELD"]),
+])
+def test_conversion_warning_impact_without_losing_usable_data(tmp_path, warnings, reasons, info):
+    run, path = corpus(tmp_path, warnings)
     original = path.read_bytes()
     result = process_publication_detailed(run, ID)
     row = result.version_status[0]
-    assert row['status'] == 'partial'
-    assert row['stage'] == 'bibliography' and row['reason'] == 'BIBLIOGRAPHY_WARNINGS'
-    assert row['bibliography_parse_warnings'] == 1
+    assert row['status'] == ('partial' if reasons else 'ok')
+    assert row['partial_reasons'] == reasons
+    assert row['info_diagnostics'] == info
+    assert row['stage'] == ('bibliography' if reasons else None)
+    assert row['reason'] == ('BIBLIOGRAPHY_WARNINGS' if reasons else None)
+    assert row['bibliography_parse_warnings'] == len(warnings)
     assert len(result.bibtex) == 1 and result.elements
     assert any('RECOVERY_CONVERSION_WARNING' in w for w in result.warnings)
     assert path.read_bytes() == original

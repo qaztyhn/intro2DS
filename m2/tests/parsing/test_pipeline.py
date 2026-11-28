@@ -272,3 +272,51 @@ def test_m1_bib_and_conflicting_bbl_are_partial(tmp_path):
     assert result.version_status[0]["bibliography_parse_warnings"] == 1
     assert len(result.bibtex) == 1
     assert result.bibtex[0]["title"] == "Original"
+
+
+@pytest.mark.parametrize(("message", "missing", "code", "impact"), [
+    ("MISSING_BIB_RESOURCE: refs", False, "MISSING_BIB_RESOURCE", "info"),
+    ("MISSING_BIB_RESOURCE: refs", True, "MISSING_BIB_RESOURCE", "affects_output"),
+    ("AMSREFS_UNSUPPORTED_FIELD key=x field=conference", False, "AMSREFS_UNSUPPORTED_FIELD", "info"),
+    ("AMSREFS_UNSUPPORTED_FIELD key=x field=title", False, "AMSREFS_UNSUPPORTED_FIELD", "affects_output"),
+    ("NEW_WARNING: unknown", False, "NEW_WARNING", "affects_output"),
+])
+def test_diagnostic_impact(message, missing, code, impact):
+    from m2.src.parsing.diagnostics import classify
+
+    assert classify(message, missing_keys=missing) == (code, impact)
+
+
+@pytest.mark.parametrize(("second_year", "citation", "reasons", "info"), [
+    ("2020", "first", [], ["BIB_DUPLICATE_FIELD_IDENTICAL", "MISSING_BIB_RESOURCE"]),
+    ("2021", "first", ["BIB_DUPLICATE_FIELD_DIFFERENT"], ["MISSING_BIB_RESOURCE"]),
+    ("2020", "absent", ["MISSING_BIB_RESOURCE", "MISSING_CITATION_KEYS"],
+     ["BIB_DUPLICATE_FIELD_IDENTICAL"]),
+])
+def test_output_impact_in_processing_report(multiversion, tmp_path, second_year, citation, reasons, info):
+    source = multiversion / "papers" / ID.replace(".", "-") / "versions/v1/source"
+    (source / "refs.bib").write_text(
+        "@article{first,title={Shared reference},author={Doe, Jane},year={2020},year={" + second_year + "}}")
+    (source / "article.tex").write_text(
+        r"\documentclass{article}\begin{document}See \cite{" + citation +
+        r"}.\bibliography{refs,unavailable}\end{document}")
+    ids = tmp_path / "ids.txt"
+    ids.write_text(ID)
+    output = tmp_path / "out"
+    run(multiversion, ids, output, "impact")
+    report = json.loads((output / "impact/processing_report.json").read_text())
+    rows = report["publications"][0]["version_status"]
+    assert [r["status"] for r in rows] == ["partial" if reasons else "ok", "ok", "no_tex", "failed"]
+    assert rows[0]["partial_reasons"] == reasons
+    assert rows[0]["info_diagnostics"] == info
+    assert all(isinstance(row[key], list) for row in rows for key in ("partial_reasons", "info_diagnostics"))
+
+
+def test_info_missing_resource_does_not_erase_hierarchy_reason(multiversion):
+    source = multiversion / "papers" / ID.replace(".", "-") / "versions/v1/source"
+    (source / "article.tex").write_text(
+        r"\documentclass{article}\begin{document}Text.\bibliography{unavailable}")
+    row = pipeline.process_publication_detailed(multiversion, ID).version_status[0]
+    assert row["status"] == "partial"
+    assert "DOCUMENT_END_MISSING" in row["partial_reasons"]
+    assert row["info_diagnostics"] == ["MISSING_BIB_RESOURCE"]

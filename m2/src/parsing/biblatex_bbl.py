@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from .contracts import BibEntry
+from .diagnostics import duplicate_field_warning
 
 _MAX_CHARS = 64 * 1024 * 1024
 _MAX_ENTRIES = 30000
@@ -165,31 +166,34 @@ def _read_entry(block: str, key: str, etype: str) -> tuple[BibEntry, list[str]]:
     fields: dict[str, object] = {}
     warnings = []
     pos = 0
+    def keep_field(name, value):
+        if name and name in fields:
+            warnings.append(duplicate_field_warning(key, name, fields[name], value))
+        elif name:
+            fields[name] = value
+
     while m := _COMMAND.search(block, pos):
         kind = m.group(1)
         try:
             if kind == "field":
                 (name, value), pos = _arguments(block, m.end(), 2)
                 name = name.strip().lower()
-                if name and name not in fields:
-                    fields[name] = value
+                keep_field(name, value)
             elif kind == "verb":
                 name, value, pos = _verb_field(block, m.end())
-                if name and name not in fields:
-                    fields[name] = value
+                keep_field(name, value)
             elif kind == "name":
                 (name, _count, _opts, payload), pos = _arguments(block, m.end(), 4)
                 if name.strip().lower() == "author":
                     people = _names(payload)
-                    if people and "author" not in fields:
-                        fields["author"] = " and ".join(people)
+                    if people:
+                        keep_field("author", " and ".join(people))
                     elif not people and payload.strip():
                         warnings.append(f"BBL_NAMES_UNREADABLE key={key}")
             else:  # \list{publisher}{2}{{First}{Second}}
                 (name, _count, payload), pos = _arguments(block, m.end(), 3)
                 name = name.strip().lower()
-                if name and name not in fields:
-                    fields[name] = " and ".join(_top_groups(payload))
+                keep_field(name, " and ".join(_top_groups(payload)))
         except ValueError as exc:
             warnings.append(f"BBL_FIELD_UNREADABLE key={key} command={kind}: {exc}")
             pos = m.end()
