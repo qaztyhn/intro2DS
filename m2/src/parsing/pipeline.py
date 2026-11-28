@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -31,6 +32,7 @@ class PublicationResult:
     stage_seconds: dict[str, float] = field(default_factory=dict)
     root_reviews: list[dict] = field(default_factory=list, init=False)
     bibliography_reconciliation: list[dict] = field(default_factory=list)
+    bibitem_stats: Counter = field(default_factory=Counter)
 
 
 def validate_root_choice(identity, version, choice):
@@ -108,6 +110,17 @@ def process_publication_detailed(run_dir: Path, arxiv_id: str, *, root_choices=N
                 errors[doc.version] = ('bibliography_extract', str(error))
                 LOGGER.exception('%s v%s stage=bibliography_extract', arxiv_id, doc.version)
     result.bib_entries_before = sum(map(len, entries.values()))
+    for version_entries in entries.values():
+        for entry in version_entries:
+            mode = entry.fields.get('parse_mode')
+            if mode is None:
+                continue  # entry came from a .bib file, not from \bibitem
+            result.bibitem_stats['total'] += 1
+            result.bibitem_stats['mode:' + str(mode)] += 1
+            if mode == 'raw_only' and not entry.fields.get('title'):
+                result.bibitem_stats['raw_only_no_title'] += 1
+            if entry.fields.get('eprint') or entry.fields.get('doi'):
+                result.bibitem_stats['with_eprint_or_doi'] += 1
     bibliography = measured('bibliography_merge', unify_bibliography, arxiv_id, entries)
     result.warnings.extend(bibliography.warnings)
     known_keys = {entry.original_key for entry in bibliography.entries}

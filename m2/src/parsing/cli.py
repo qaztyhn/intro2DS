@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 
 from m1.src.schema import no_symlinks, require_arxiv_id
@@ -43,6 +44,7 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
     if (output_dir / label).exists() or (output_dir / f'benchmark_{label}.json').exists():
         raise FileExistsError(f'output label already used: {label}')
     statuses, bib_before, stages = [], {}, {}
+    bibitem_total = Counter()
     audit = []
     root_reviews = []
 
@@ -56,6 +58,7 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
         root_reviews.extend(result.root_reviews)
         statuses.extend(result.version_status)
         bib_before[identity] = result.bib_entries_before
+        bibitem_total.update(result.bibitem_stats)
         for stage, seconds in result.stage_seconds.items():
             stages[stage] = stages.get(stage, 0) + seconds
         audit.append({'arxiv_id': identity, 'version_status': result.version_status,
@@ -75,7 +78,8 @@ def run(run_dir: Path, ids_file: Path, output_dir: Path, label: str, *, root_cho
     if root_reviews:
         root_reviews.sort(key=lambda row: (row['arxiv_id'], row['version']))
         write_json_atomic(tables / 'root_review.json', root_reviews)
-    report = {'publications': audit, 'stage_seconds_sum': stages,
+        report = {'publications': audit, 'stage_seconds_sum': stages,
+              'bibitem_parse_stats': dict(sorted(bibitem_total.items())),
               'note': 'Per-stage sums include calls returning a detailed result, even when versions failed. '
                       'Publication attempts raising before that result are excluded; benchmark wall time includes them.'}
     (output_dir / label / 'processing_report.json').write_text(
