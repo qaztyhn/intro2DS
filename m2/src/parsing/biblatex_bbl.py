@@ -184,6 +184,50 @@ def _read_entry(block: str, key: str, etype: str) -> tuple[BibEntry, list[str]]:
     return BibEntry(original_key=key, entry_type=etype, fields=fields), warnings
 
 
+def _next_entry_boundary(text: str, start: int) -> tuple[str, int, int] | None:
+    r"""Find the next top-level \entry or \endentry, skipping braced values.
+
+    Biber metadata can contain macro-like text in nested brace groups or in
+    \verb...\endverb payloads. Those must not split a real entry.
+    """
+    i = start
+    depth = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            if text.startswith(r"\verb", i):
+                after = i + len(r"\verb")
+                if after == len(text) or not text[after].isalpha():
+                    if after < len(text) and text[after] == "{":
+                        try:
+                            _, i = _arguments(text, after, 1)
+                            continue
+                        except ValueError:
+                            pass
+                    else:
+                        end = text.find(r"\endverb", after)
+                        if end < 0:
+                            return None
+                        i = end + len(r"\endverb")
+                        continue
+            if depth == 0:
+                entry = _ENTRY.match(text, i)
+                if entry:
+                    return "entry", entry.start(), entry.end()
+                endentry = _END_ENTRY.match(text, i)
+                if endentry:
+                    return "endentry", endentry.start(), endentry.end()
+            # Skip the following character to avoid counting escaped braces.
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        i += 1
+    return None
+
+
 def parse_biblatex_bbl(text: str) -> tuple[list[BibEntry], list[str]]:
     """Parse a supported Biber BBL subset, returning entries and diagnostics.
 
@@ -208,16 +252,22 @@ def parse_biblatex_bbl(text: str) -> tuple[list[BibEntry], list[str]]:
             continue
         key = key.strip()
         entry_type = entry_type.strip().lower()
-        end = _END_ENTRY.search(clean, start)
-        if end is None:
+        boundary = _next_entry_boundary(clean, start)
+        if boundary is None:
             warnings.append(f"BBL_TRUNCATED_ENTRY key={key or '?'}")
             break
-        position = end.end()
+        kind, boundary_start, boundary_end = boundary
+        if kind == "entry":
+            # Do not consume metadata from the next entry; resume there.
+            warnings.append(f"BBL_TRUNCATED_ENTRY key={key or '?'} before_next_entry")
+            position = boundary_start
+            continue
+        position = boundary_end
         if not key or not entry_type:
             warnings.append(f"BBL_MALFORMED_ENTRY offset={match.start()}: empty key/type")
             continue
         try:
-            entry, issues = _read_entry(clean[start:end.start()], key, entry_type)
+            entry, issues = _read_entry(clean[start:boundary_start], key, entry_type)
             entries.append(entry)
             warnings.extend(issues)
         except ValueError as exc:
