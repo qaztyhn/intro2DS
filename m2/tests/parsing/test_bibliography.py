@@ -773,3 +773,102 @@ def test_biber_bbl_partial_recovery_reports_truncated_entries():
         r"\entry{broken}{article}{}\field{title}{Incomplete}")
     assert [entry.original_key for entry in entries] == ["ok"]
     assert any("BBL_TRUNCATED_ENTRY" in w for w in warnings)
+
+
+def test_biber_missing_endentry_does_not_swallow_next_entry():
+    from m2.src.parsing.biblatex_bbl import parse_biblatex_bbl
+    text = (
+        r"\entry{broken}{article}{}\field{title}{Broken title}"
+        r"\entry{good}{article}{}\field{title}{Good title}"
+        r"\field{year}{2021}\endentry"
+    )
+    entries, diagnostics = parse_biblatex_bbl(text)
+    assert [entry.original_key for entry in entries] == ["good"]
+    assert entries[0].fields["title"] == "Good title"
+    assert entries[0].fields["year"] == "2021"
+    assert any("BBL_TRUNCATED_ENTRY key=broken" in w for w in diagnostics)
+
+
+def test_biber_missing_endentry_recovers_multiple_following_records():
+    from m2.src.parsing.biblatex_bbl import parse_biblatex_bbl
+    text = (
+        r"\entry{bad}{article}{}\field{title}{Broken}"
+        r"\entry{a}{article}{}\field{title}{{A} Title}\endentry"
+        r"\entry{b}{book}{}\field{title}{B Title}\endentry"
+    )
+    entries, diagnostics = parse_biblatex_bbl(text)
+    assert [entry.original_key for entry in entries] == ["a", "b"]
+    assert len(diagnostics) == 1
+    assert "BBL_TRUNCATED_ENTRY" in diagnostics[0]
+
+
+def test_biber_entry_like_macro_inside_braced_field_does_not_split():
+    from m2.src.parsing.biblatex_bbl import parse_biblatex_bbl
+    text = (
+        r"\entry{real}{article}{}"
+        r"\field{title}{Contains {\entry{not-an-entry}} text}"
+        r"\field{year}{2020}\endentry"
+        r"\entry{other}{article}{}\field{title}{Other}\endentry"
+    )
+    entries, diagnostics = parse_biblatex_bbl(text)
+    assert [entry.original_key for entry in entries] == ["real", "other"]
+    assert diagnostics == []
+
+
+def test_commented_biber_marker_does_not_hide_bibitem_entries():
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    bbl = (
+        "% Biber marker is only a comment: \\entry{x}{article}{}\n"
+        "\\begin{thebibliography}{1}\n"
+        "\\bibitem{good} A. Smith.\n"
+        "\\newblock Good Paper.\n"
+        "\\newblock Nature, 2020.\n"
+        "\\end{thebibliography}"
+    )
+    doc = GatheredDocument("2507.11662", 1, "main.tex",
+                           r"\cite{good}", [], {"main.bbl": bbl}, "ok")
+    entries, warnings = extract_bibliography_detailed(doc)
+    assert [entry.original_key for entry in entries] == ["good"]
+    assert entries[0].fields["title"] == "Good Paper"
+    assert warnings == []
+
+
+def test_equivalent_bib_and_biber_bbl_duplicate_is_not_warning():
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    doc = GatheredDocument("2507.11662", 1, "main.tex", r"\cite{x}", [],
+        {"refs.bib": "@article{x,title={Shared Title},year={2020},author={Doe, Jane}}",
+         "main.bbl": (r"\entry{x}{article}{}"
+                      r"\field{title}{Shared Title}"
+                      r"\field{year}{2020}"
+                      r"\endentry")}, "ok")
+    entries, diagnostics = extract_bibliography_detailed(doc)
+    assert len(entries) == 1
+    assert entries[0].fields["title"] == "Shared Title"
+    assert entries[0].fields["year"] == 2020
+    assert diagnostics == []
+
+
+def test_complementary_bib_and_bbl_metadata_is_not_warning():
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    doc = GatheredDocument("2507.11662", 1, "main.tex", r"\cite{x}", [],
+        {"refs.bib": "@article{x,title={Shared},year={2020}}",
+         "main.bbl": (r"\entry{x}{article}{}"
+                      r"\field{title}{Shared}"
+                      r"\verb{doi}\verb 10.1234/something \endverb"
+                      r"\endentry")}, "ok")
+    entries, diagnostics = extract_bibliography_detailed(doc)
+    assert len(entries) == 1
+    assert diagnostics == []
+
+
+def test_conflicting_bib_and_bbl_duplicate_still_warning():
+    from m2.src.parsing.bibliography import extract_bibliography_detailed
+    doc = GatheredDocument("2507.11662", 1, "main.tex", r"\cite{x}", [],
+        {"refs.bib": "@article{x,title={Original},year={2020}}",
+         "main.bbl": (r"\entry{x}{article}{}"
+                      r"\field{title}{Different}"
+                      r"\field{year}{2020}"
+                      r"\endentry")}, "ok")
+    entries, diagnostics = extract_bibliography_detailed(doc)
+    assert len(entries) == 1 and entries[0].fields["title"] == "Original"
+    assert any("duplicate key" in w and "title" in w for w in diagnostics)
