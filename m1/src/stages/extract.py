@@ -306,6 +306,18 @@ def _completed_source(manifest, source_dir):
         return False
 
 
+def _delete_archive_if_done(cfg, manifest, source_dir):
+    """Delete the raw archive only after the manifest is on disk and the cached output verifies."""
+    if manifest.get("extract_status") != OK or not _completed_source(manifest, source_dir):
+        return
+    try:
+        archive = safe_path(pathlib.Path(cfg["output_root"]) / cfg["run_id"],
+                            manifest.get("archive_path"))
+        archive.unlink(missing_ok=True)
+    except (ValueError, TypeError, OSError):
+        pass  # keeping the archive is always safe
+
+
 def extract_version(cfg, arxiv_id, version):
     """Update the downloader's manifest, retaining its fields and parse status."""
     require_version(version)
@@ -356,6 +368,8 @@ def extract_version(cfg, arxiv_id, version):
         if key in result:
             manifest[key] = result[key]
     write_json_atomic(path, manifest)
+    if cfg.get("delete_archive_after_extract", False):
+        _delete_archive_if_done(cfg, manifest, source)
     return manifest
 
 
