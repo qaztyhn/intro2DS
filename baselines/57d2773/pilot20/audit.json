@@ -1,0 +1,547 @@
+{
+  "summary": {
+    "publications": 20,
+    "versions": 34,
+    "extract_status": {
+      "ok": 33,
+      "empty": 1
+    },
+    "filtered_suffix_counts": {
+      ".h5": 21,
+      ".pdf": 188,
+      ".dat": 2,
+      ".py": 5,
+      ".png": 35,
+      ".jpg": 6,
+      "<none>": 2,
+      ".dtx": 1,
+      ".ins": 1,
+      ".out": 1,
+      ".nb": 1
+    },
+    "review_versions": 1,
+    "retry_archive_available": 1,
+    "publication_errors": 0,
+    "note": "Review candidates, not proof that another extraction can repair every case; PDF-only source is not a parser failure."
+  },
+  "versions": [
+    {
+      "arxiv_id": "2507.01659",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".h5": 7,
+        ".pdf": 8
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01659",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".dat": 1,
+        ".pdf": 9,
+        ".h5": 7
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01659",
+      "version": 3,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".dat": 1,
+        ".pdf": 10,
+        ".h5": 7
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01660",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 3
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01661",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01661",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01662",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01663",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".py": 2,
+        ".pdf": 12
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01663",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".py": 3,
+        ".pdf": 14
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01664",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01665",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 2
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01666",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".png": 3
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01667",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 5
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01667",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 5
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01667",
+      "version": 3,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 5
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01668",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".png": 3,
+        ".pdf": 6,
+        ".jpg": 5
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01669",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01669",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01670",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".jpg": 1,
+        ".png": 1
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01671",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 5
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01671",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 6
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01671",
+      "version": 3,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 6
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01671",
+      "version": 4,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 6
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01672",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".png": 10
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01673",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".png": 4,
+        ".pdf": 8,
+        "<none>": 2,
+        ".dtx": 1,
+        ".ins": 1
+      },
+      "filtered_source_candidates": [
+        "elsarticle.dtx",
+        "elsarticle.ins"
+      ],
+      "unconverted_assets": [
+        {
+          "original": "changelog.txt",
+          "original_sha256": "b63a73b66689f8089fc3b2bcf9092446527ba24a17c717ca382a1ac7337980fe",
+          "bytes": 1189,
+          "encoding": "utf-8",
+          "error": "plain txt not identified as TeX source"
+        },
+        {
+          "original": "manifest.txt",
+          "original_sha256": "98107738354036eb489d5ec5438247cccc9145cd28135c31f439120f54566165",
+          "bytes": 1891,
+          "encoding": "utf-8",
+          "error": "plain txt not identified as TeX source"
+        }
+      ],
+      "warnings": [
+        "changelog.txt: plain txt not identified as TeX source",
+        "manifest.txt: plain txt not identified as TeX source"
+      ],
+      "review_reasons": [
+        "filtered_source_candidates"
+      ]
+    },
+    {
+      "arxiv_id": "2507.01674",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {},
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01675",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 10,
+        ".png": 4
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01675",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 13,
+        ".png": 4
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01675",
+      "version": 3,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 15,
+        ".png": 3
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01675",
+      "version": 4,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 17,
+        ".png": 2
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01676",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 5,
+        ".png": 1
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01677",
+      "version": 1,
+      "extract_status": "empty",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 1
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01678",
+      "version": 1,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 9
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    },
+    {
+      "arxiv_id": "2507.01678",
+      "version": 2,
+      "extract_status": "ok",
+      "policy": "preserve-convert-v1",
+      "archive_available": true,
+      "filtered_suffix_counts": {
+        ".pdf": 8,
+        ".out": 1,
+        ".nb": 1
+      },
+      "filtered_source_candidates": [],
+      "unconverted_assets": [],
+      "warnings": [],
+      "review_reasons": []
+    }
+  ],
+  "publication_errors": [],
+  "retry_plan": [
+    {
+      "arxiv_id": "2507.01673",
+      "version": 1,
+      "paper_dir": "/private/tmp/m1m2-pilot.HQg3Ho/preserve/papers/2507-01673",
+      "review_reasons": [
+        "filtered_source_candidates"
+      ],
+      "archive": "/private/tmp/m1m2-pilot.HQg3Ho/preserve/tmp/2507-01673/v1/source.archive"
+    }
+  ]
+}

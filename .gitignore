@@ -5,7 +5,8 @@ __pycache__/
 .pytest_cache/
 
 # Secrets
-.env
+.env*
+!.env.example
 
 # Crawled datasets
 data/

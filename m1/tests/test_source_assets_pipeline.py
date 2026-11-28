@@ -156,6 +156,18 @@ def test_member_recrawl_configs_are_fresh_and_cover_original_ids():
         assert cfg['output_root'].name=='recrawl_20261128'
 
 
+def test_pilot20_preserve_config_uses_pilot_ids_and_separate_output():
+    from m1.src.config import PROJECT_ROOT, load_config
+    from m1.src.utils.common import load_ids
+
+    cfg = load_config(PROJECT_ROOT / "configs/pilot20_preserve.yaml")
+    assert cfg["preserve_source_assets"] is True
+    assert cfg["ids_file"] == PROJECT_ROOT / "configs/ids.txt"
+    assert load_ids(cfg["ids_file"]) == [f"2507.{number:05d}" for number in range(1659, 1679)]
+    assert cfg["output_root"] == PROJECT_ROOT.parent / "experiments/pilot20_preserve"
+    assert cfg["run_id"].startswith("M1_preserve_pilot20_")
+
+
 def test_inventory_records_malformed_manifest_without_losing_other_versions(tmp_path):
     cfg,paper,_=setup(tmp_path,{'main.tex':MAIN.encode()})
     (paper/'versions/v1/manifest.json').write_text('[]',encoding='utf-8')

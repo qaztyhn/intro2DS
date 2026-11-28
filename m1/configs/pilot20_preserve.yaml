@@ -1,0 +1,14 @@
+# Preserve-source run for the 20-ID pilot.
+run_id: "M1_preserve_pilot20_{timestamp}"
+config_name: "B"
+schema_version: 1
+ids_file: "configs/ids.txt"  # one base arXiv id per line; blank lines and '#' lines ignored
+output_root: "../experiments/pilot20_preserve"   # results go to <output_root>/<run_id>/
+arxiv_delay_seconds: 3       # pause between arXiv API calls and between /src/ downloads
+user_agent: "Intro2DS-arXiv-crawler/1.0 (student project, HCMUS; contact: 24120058@student.hcmus.edu.vn)"
+timeout: 30                  # seconds, per HTTP request
+max_retries: 3               # retries after the first attempt
+s2_max_retries: 3
+s2_backoff_base_seconds: 5
+# Fresh crawls retain original text assets and derive M2-compatible inputs.
+preserve_source_assets: true
