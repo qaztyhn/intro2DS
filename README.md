@@ -46,6 +46,12 @@ The crawler supports:
 - `m1/tests/`, `m2/tests/`: Offline unit tests
 - `m1/docs/`, `m2/docs/`: Design and execution notes
 
+## Repository layout
+
+Code is split by milestone: `m1/src` (crawler) and `m2/src` (parser), each with its own `tests/`
+and `docs/`. A single `requirements.txt` at the repository root covers both. All commands are run
+from the repository root, e.g. `python -m m1.src.main` and `python -B -m m2.src.parsing.cli`.
+
 ## Installation
 
 Tested with Python 3.12; source preservation uses Python 3.11+ APIs.
@@ -98,7 +104,7 @@ All three stages (`extract`, `references`, `storage`) are wired in `m1/src/main.
 `run.json` records `started_at`, `finished_at`, `run_status` (`running`, `completed`, `interrupted`, `crashed`),
 `cache_mode` (`cold` for a new run, `warm` when resuming), `input_ids` and the environment.
 
-## Milestone 2 ? Integrated parser
+## Milestone 2 — Integrated parser
 
 M2 modules live in `m2/src/parsing`; run commands from the repository root.
 See [M2 integration and execution](m2/docs/INTEGRATION.md) for setup, CLI arguments,
