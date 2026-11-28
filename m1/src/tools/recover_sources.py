@@ -33,6 +33,15 @@ from m2.src.parsing.gathering import events, strip_comments, root_count, _top_le
 
 RECOVERY_SUFFIXES = {'.tex', '.bib', '.bbl', '.bst', '.ltx', '.latex', '.sty', '.cls',
                      '.def', '.inc', '.tikz', '.pgf', '.pdf_tex', '.eps_tex', '.txt'}
+DOCUMENT_SUFFIXES = {'.tex', '.ltx', '.latex'}
+PACKAGE_SUFFIXES = {'.sty', '.cls', '.def', '.bst', '.cfg', '.clo', '.fd',
+                    '.bbx', '.cbx', '.lbx', '.dbx', '.dtx', '.ins'}
+# These are graphics, binaries, or generated output, not document text.
+EXCLUDED_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.pdf', '.eps', '.ps', '.svg',
+                     '.tif', '.tiff', '.webp', '.bmp', '.h5', '.zip', '.gz', '.tar',
+                     '.aux', '.log', '.toc', '.lof', '.lot', '.blg', '.bcf', '.out',
+                     '.fls', '.fdb_latexmk', '.synctex', '.pyc', '.exe', '.dll'}
+BIB_SIGNATURE = re.compile(r'(?m)^\s*@[A-Za-z]+\s*[{(]')
 DOWNLOAD_THROTTLE = Throttle(3.1)
 
 
@@ -98,71 +107,143 @@ def text_bytes(data):
         return data.decode('latin-1'), 'latin-1'
 
 
-def referenced_text_assets(original):
-    """Find literal TXT inputs reachable from declared/unique compilation roots.
+def _candidate_text(data):
+    """Reject binary/control-heavy or HTML payloads, including unknown suffixes."""
+    text, _ = text_bytes(data)
+    if any(ord(c) < 32 and c not in '\t\n\r\f' for c in text):
+        raise ValueError('binary/control content')
+    if re.search(r'<\s*(?:!doctype\s+html|html)\b', text, re.I):
+        raise ValueError('HTML is not TeX source')
+    return text
 
-    No package execution or unknown-branch guessing. Unreferenced logs and
-    download instructions do not become TeX merely because they are textual.
-    """
-    names={p.relative_to(original).as_posix() for p in original.rglob('*') if p.is_file()}
-    cache={}
+
+def _asset_paths(original, names=None):
+    """Identify document roots and literal text dependencies without executing TeX."""
+    names = set(names) if names is not None else {
+        p.relative_to(original).as_posix() for p in original.rglob('*') if p.is_file()}
+    cache = {}
     def clean(name):
-        if name not in cache:cache[name]=strip_comments(text_bytes((original/name).read_bytes())[0])[0]
+        if name not in cache:
+            cache[name] = strip_comments(_candidate_text((original/name).read_bytes()))[0]
         return cache[name]
-    def resolve(origin,raw):
-        raw=raw.strip()
+    def resolve(origin, raw, root, suffix):
+        raw = raw.strip()
         if not raw or any(c in raw for c in '\\#$\x00{}') or ':' in raw or raw.startswith('/'):
             return None
-        candidates={posixpath.normpath(posixpath.join(base,raw)) for base in (posixpath.dirname(origin),'')}
-        candidates={p for p in candidates if p!='..' and not p.startswith('../')}
-        found=candidates&names
-        if not found:found={p+'.tex' for p in candidates}&names
-        return next(iter(found)) if len(found)==1 else None
-    roots=[]
-    readme=original/'00README.json'
+        candidates = {posixpath.normpath(posixpath.join(base, raw))
+                      for base in (posixpath.dirname(origin), posixpath.dirname(root), '')}
+        candidates = {p for p in candidates if p != '..' and not p.startswith('../')}
+        found = candidates & names
+        if not found:
+            found = {p + suffix for p in candidates} & names
+        return next(iter(found)) if len(found) == 1 else None
+    roots = []
+    for name in sorted(names):
+        suffix = Path(name).suffix.lower()
+        if name == '00README.json' or suffix in PACKAGE_SUFFIXES | {'.bib', '.bbl'}:
+            continue
+        try:
+            text = clean(name)
+            if suffix not in DOCUMENT_SUFFIXES:
+                # Nonstandard roots need a document envelope as well as an
+                # active documentclass; a macro snippet is not a paper.
+                if not (re.search(r'\\begin\s*\{document\}', text)
+                        and re.search(r'\\end\s*\{document\}', text)):
+                    continue
+            if root_count(text):
+                roots.append(name)
+        except (ValueError, UnicodeError):
+            continue
+    readme = original/'00README.json'
+    selected = roots
     if readme.is_file():
         try:
-            roots=[n for n in parse_compilation_readme(readme.read_bytes())['toplevels'] if n in names]
-        except (ValueError,UnicodeError):pass
-    if not roots:
-        for n in sorted(names):
-            if Path(n).suffix.lower() not in {'.tex','.ltx','.latex'}:continue
-            try:
-                if root_count(clean(n)):roots.append(n)
-            except ValueError:continue
-        if len(roots)>1:
-            from types import SimpleNamespace
-            roots=_top_level_roots(SimpleNamespace(names=names,clean=clean),roots)
-        if len(roots)!=1:return set()
-    referenced=set();ordinary=set();flags=set();values={};scopes=[];calls=0
-    def visit(name,stack):
+            hint = parse_compilation_readme(readme.read_bytes())
+            selected = [n for n in roots if n not in hint['ignored']]
+            declared = [n for n in hint['toplevels'] if n in selected]
+            if declared:
+                selected = declared
+        except (ValueError, UnicodeError):
+            pass
+    if len(selected) > 1:
+        from types import SimpleNamespace
+        selected = _top_level_roots(SimpleNamespace(names=names, clean=clean), selected) or selected
+    # Preserve dependencies of every plausible compilation in ambiguous cases;
+    # M2 still decides whether the root is unambiguous.
+    referenced = set()
+    ordinary=set();flags=set();values={};scopes=[];calls=0
+    def visit(name, stack, root):
         nonlocal calls
-        calls+=1
-        if calls>10000 or len(stack)>=128 or name in stack:return
-        try:walk(clean(name),name,stack+(name,))
-        except (ValueError,UnicodeError):return
-    def walk(text,origin,stack,depth=0):
-        if depth>=128:return
+        calls += 1
+        if calls > 10000 or len(stack) >= 128 or name in stack:
+            return
+        try:
+            walk(clean(name), name, stack+(name,), root)
+        except (ValueError, UnicodeError):
+            return
+    def walk(text, origin, stack, root, depth=0):
+        if depth >= 128:
+            return
         for _,_,kind,payload in events(text,ordinary,flags,values,scopes):
-            if kind=='conditional' and payload is not None:walk(payload,origin,stack,depth+1)
+            if kind == 'conditional' and payload is not None:
+                walk(payload,origin,stack,root,depth+1)
             elif kind in {'input','include','subfile','subfileinclude'}:
-                target=resolve(origin,payload)
+                target = resolve(origin,payload,root,'.tex')
                 if target:
-                    if target.lower().endswith('.txt'):referenced.add(target)
-                    if Path(target).suffix.lower() in {'.tex','.ltx','.latex','.txt','.inc'}:
-                        visit(target,stack)
-    for name in roots:
-        ordinary.clear();flags.clear();values.clear();scopes.clear();visit(name,())
-    return referenced
+                    try:
+                        clean(target)
+                    except (ValueError, UnicodeError):
+                        continue
+                    referenced.add(target)
+                    if Path(target).suffix.lower() not in {'.bib','.bbl','.bst'}:
+                        visit(target,stack,root)
+            elif kind in {'bibliography','addbibresource'}:
+                for raw in payload.split(','):
+                    target = resolve(origin,raw,root,'.bib')
+                    if target:
+                        referenced.add(target)
+    for name in selected:
+        ordinary.clear();flags.clear();values.clear();scopes.clear();visit(name,(),name)
+    return set(roots), referenced
+
+
+def referenced_text_assets(original):
+    """Compatibility helper returning literal text dependencies."""
+    return _asset_paths(original)[1]
+
+
+def select_extra_assets(stage, candidates):
+    """Select unknown-suffix text by syntax or reachable literal dependency.
+
+    Do not publish arbitrary logs, images, binary files or unrelated prose.
+    All staging is bounded by the low-level extractor's existing limits.
+    """
+    names = {p.relative_to(stage).as_posix() for p in stage.rglob('*') if p.is_file()}
+    textual = set()
+    source_like = set()
+    for name in sorted(candidates):
+        path = Path(name)
+        if (path.suffix.lower() in EXCLUDED_SUFFIXES or path.name.startswith('.env')
+                or path.name.startswith('.')):
+            continue
+        try:
+            text = _candidate_text((stage/name).read_bytes())
+        except (ValueError, UnicodeError):
+            continue
+        textual.add(name)
+        if _is_tex(text.encode('utf-8')) or BIB_SIGNATURE.search(text):
+            source_like.add(name)
+    roots, referenced = _asset_paths(stage, (names - candidates) | textual)
+    return textual & (source_like | roots | referenced)
 
 
 def convert_assets(original, source):
     """Convert bibliographies/text assets without inventing missing metadata."""
     source.mkdir()
     records, warnings, mapping = [], [], {}
-    active_txt = referenced_text_assets(original)
-    has_document_source = any(p.is_file() and p.suffix.lower() in {'.tex', '.ltx', '.latex'}
-                              for p in original.rglob('*'))
+    roots, active_text = _asset_paths(original)
+    has_document_source = bool(roots) or any(
+        p.is_file() and p.suffix.lower() in DOCUMENT_SUFFIXES for p in original.rglob('*'))
     for f in sorted(original.rglob('*')):
         if not f.is_file():
             continue
@@ -178,6 +259,12 @@ def convert_assets(original, source):
         try:
             text, encoding = text_bytes(data)
             record['encoding'] = encoding
+            if suffix not in DOCUMENT_SUFFIXES | {'.bib', '.bbl'}:
+                _candidate_text(data)
+            if suffix in PACKAGE_SUFFIXES and name not in active_text:
+                record.update(conversion='package_source_only', asset_role='support')
+                records.append(record)
+                continue
             if suffix in {'.tex', '.bib'}:
                 target, converted, kind = name, data, 'unchanged'
             elif suffix == '.bbl':
@@ -202,18 +289,20 @@ def convert_assets(original, source):
                     target, converted, kind = name + '.tex', data, (
                         'empty_bibliography_to_tex' if is_empty_bibliography(text) else 'bibitems_to_tex')
             else:
-                if suffix == '.txt' and re.search(r'(?m)^\s*@[A-Za-z]+\s*[{(]', text):
+                if suffix not in DOCUMENT_SUFFIXES | PACKAGE_SUFFIXES and BIB_SIGNATURE.search(text):
                     from m2.src.parsing.bibliography import parse_bib
                     entries, issues = parse_bib(text)
                     if not entries or issues:
                         raise ValueError('text bibliography is malformed; original retained')
                     target, converted, kind = name + '.bib', data, 'text_bibliography_to_bib'
-                elif suffix == '.txt' and name not in active_txt and not _is_tex(data[:65536]):
+                elif suffix in DOCUMENT_SUFFIXES or name in roots or name in active_text:
+                    target, converted, kind = name + '.tex', data, 'text_asset_to_tex'
+                elif suffix == '.txt' and not _is_tex(data[:65536]):
                     raise ValueError('plain txt not identified as TeX source')
                 else:
-                    target, converted, kind = name + '.tex', data, 'text_asset_to_tex'
-                if re.search(r'<\s*(?:!doctype\s+html|html)\b', text, re.I):
-                    raise ValueError('HTML is not TeX source')
+                    record.update(conversion='unreferenced_source_only', asset_role='support')
+                    records.append(record)
+                    continue
             if target.endswith('.tex') and not has_document_source:
                 raise ValueError('support asset without document TeX; retained only in original_assets')
             if target != name and (original / target).exists():
@@ -224,7 +313,11 @@ def convert_assets(original, source):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(converted)
             record.update(derived=target, conversion=kind, derived_sha256=sha(converted))
-            if suffix=='.txt' and name in active_txt:
+            record['asset_role'] = (
+                'bibliography' if target.lower().endswith('.bib') or suffix == '.bbl'
+                else 'document' if suffix in DOCUMENT_SUFFIXES or name in roots
+                else 'support' if suffix in PACKAGE_SUFFIXES else 'include')
+            if name in active_text:
                 record['referenced_on_compilation_path']=True
             mapping[name] = target
             if kind == 'text_bibliography_to_bib' and name.lower().endswith('.bib.txt'):
@@ -270,7 +363,7 @@ def convert_assets(original, source):
         clean, _ = strip_comments(text)
         patches = []
         for start, end, kind, payload in events(clean):
-            if kind in {'input', 'include'}:
+            if kind in {'input', 'include', 'subfile', 'subfileinclude'}:
                 old = resolve(record['original'], payload, '.tex')
                 if old and mapping[old] != old:
                     name = posixpath.relpath(mapping[old], posixpath.dirname(target) or '.')
@@ -350,7 +443,7 @@ def recover_version(item, output, *, download=False):
         download_info = download_original_archive(url, archive)
     original = directory / 'original_assets'
     result = extract_source(archive, original, source_suffixes=RECOVERY_SUFFIXES,
-                            source_names={'00README.json'})
+                            source_names={'00README.json'}, select_extra=select_extra_assets)
     if result['extract_status'] == 'failed':
         return dict(arxiv_id=identity, version=version, member_id=item.get('member_id'),
                     status='extract_failed', extraction=result)
@@ -382,6 +475,7 @@ def recover_version(item, output, *, download=False):
                                source_dir=directory/'source')
     provenance = dict(arxiv_id=identity, version=version, member_id=item.get('member_id'),
                       archive=str(archive.resolve()), archive_sha256=sha(archive.read_bytes()),
+                      policy='preserve-convert-v1',
                       download=download_info, extraction=result, records=records, warnings=warnings, validation=issues)
     write_json(directory/'recovery_provenance.json', provenance)
     old_paper = Path(item['paper_dir']) if item.get('paper_dir') else None

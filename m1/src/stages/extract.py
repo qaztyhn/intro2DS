@@ -100,8 +100,9 @@ def _members(archive, reader):
         reader.in_data = True  # from here until the next start_header, only data is read
         yield member
         
-def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), inventory=None):
+def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), inventory=None, select_extra=None):
     total, kept, files, seen = 0, 0, [], set()
+    candidates = set()
     with payload.open("rb") as handle, tarfile.open(fileobj=(reader := _TarReader(handle)), mode="r:") as archive:
         for count, member in enumerate(_members(archive, reader), 1):
             if count > limits.max_members:
@@ -124,16 +125,23 @@ def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), 
                 raise CrawlError("archive exceeds unpacked size limit", CORRUPT_SOURCE)
             keep = (name in source_names or pathlib.PurePosixPath(name).suffix.lower()
                     in (source_suffixes if source_suffixes is not None else {".tex", ".bib", ".bbl"}))
+            # Stage unknown regular files only for the optional preservation
+            # selector. The existing archive/member limits also bound this staging.
             with archive.extractfile(member) as source:
-                if keep:
+                head = source.read(min(65536, member.size))
+                extra = not keep and select_extra is not None
+                if keep or extra:
                     target = safe_path(stage, name)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with target.open("xb") as dest:
-                        actual = _copy(source, dest, limits.max_file_bytes)
-                    files.append(name)
-                    kept += actual
+                        dest.write(head)
+                        actual = len(head) + _copy(source, dest, limits.max_file_bytes - len(head))
+                    if keep:
+                        files.append(name)
+                        kept += actual
+                    else:
+                        candidates.add(name)
                 else:
-                    head = source.read(min(65536, member.size))
                     actual = len(head) + _copy(source, None, limits.max_file_bytes - len(head))
             if actual != member.size:
                 raise CrawlError(f"truncated archive entry: {name}", CORRUPT_SOURCE)
@@ -144,6 +152,19 @@ def _extract_tar(payload, stage, limits, source_suffixes=None, source_names=(), 
                     reason='selected_source_asset' if keep else 'suffix_not_selected',
                     source_like=False if keep else bool(_is_tex(head) or (
                         b'\0' not in head and re.search(rb'(?mi)^\s*@[A-Za-z]+\s*[{(]', head)))))
+    if select_extra is not None and candidates:
+        selected = set(select_extra(stage, candidates))
+        if not selected <= candidates:
+            raise ValueError("source selector returned undeclared archive members")
+        for name in candidates - selected:
+            safe_path(stage, name).unlink()
+        files.extend(selected)
+        for row in inventory or ():
+            if row['path'] in selected:
+                row.update(disposition='retained', reason='content_or_dependency_selected')
+                kept += row['bytes']
+        if inventory is None:
+            kept += sum(safe_path(stage, name).stat().st_size for name in selected)
     return sorted(files), total, kept
 
 
@@ -192,7 +213,7 @@ def _same_output(existing, staged, files):
 
 
 def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=False,
-                   source_suffixes=None, source_names=()):
+                   source_suffixes=None, source_names=(), select_extra=None):
     """Return extraction fields plus output_path/message, without writing a manifest.
 
     Existing nonempty output is never replaced. reuse_existing permits recovery
@@ -245,7 +266,7 @@ def extract_source(archive_path, output_dir, *, limits=None, reuse_existing=Fals
             elif _is_tar(payload):
                 result["source_format"] = "tar.gz" if compressed else "tar"
                 files, total, kept = _extract_tar(payload, stage, limits, source_suffixes, source_names,
-                                                result['asset_inventory'])
+                                                result['asset_inventory'], select_extra)
             elif head[257:262] == b"ustar":
                 raise CrawlError("corrupt tar header", CORRUPT_SOURCE)
             elif _is_tex(head):

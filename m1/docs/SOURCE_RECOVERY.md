@@ -4,7 +4,8 @@ Fresh normal M1 crawls now use `preserve_source_assets: true` by default. The
 normal extract hook preserves original text assets, invokes the same converters
 as the recovery tool, and produces `.tex/.bib` inputs for the existing M2 parser.
 Setting the option to false retains legacy `.tex/.bib/.bbl` extraction. The
-low-level `extract_source` API keeps its original default whitelist.
+low-level `extract_source` API keeps its original default whitelist; both preservation
+entry points opt into bounded content/dependency selection for other suffixes.
 
 Each normal version also writes `source_assets_audit.json`: archive member names,
 suffixes, sizes, retained/filtered decisions, conversion records, warnings and
@@ -111,9 +112,12 @@ the original unpacked total is in provenance, while the derived manifest leaves
 | Classic BBL with `\bibitem` | `name.bbl.tex` | Lossless citation text; structured metadata remains best effort |
 | BibLaTeX/Biber BBL | `name.bbl.bib` | Supported fields/names only; malformed/unsupported records diagnosed |
 | AMSRefs BBL with `\bib{key}{type}{fields}` | `name.bbl.bib` | Repeated authors/editors preserved; unsupported nested metadata diagnosed |
-| `.ltx`, `.latex`, `.sty`, `.cls`, `.def`, `.inc`, `.tikz`, `.pgf`, `.pdf_tex`, `.eps_tex` | Original name plus `.tex` | Text retention, not automatic interpretation of custom packages/macros |
+| `.ltx`, `.latex` | Original name plus `.tex` | Document source |
+| `.sty`, `.cls`, `.def` and package definitions | Original only unless explicitly included | Never document roots; no package execution |
+| `.inc`, `.tikz`, `.pgf`, `.pdf_tex`, `.eps_tex` | Original, plus `.tex` if literally included | Unused source remains original only |
+| Extensionless/custom suffix | Original if source-like or reached by literal dependency; derive `.tex`/`.bib` when identified | Nonstandard roots require a document envelope; binary, graphics and unrelated prose are excluded |
 | `.txt` containing valid BibTeX | Original name plus `.bib` | Parse errors prevent conversion |
-| `.txt` identified as TeX | Original name plus `.tex` | Ordinary logs/download instructions are not source |
+| `.txt` containing a complete LaTeX document | Original name plus `.tex` | Recognized even without a native `.tex` file |
 | Plain `.txt` reached by active literal `input/include/subfile` | Original name plus `.tex` | Requires a known compilation root and resolved conditional path |
 | `.bst` | Original assets only | Style source is preserved, not mislabeled as bibliography or document text |
 
@@ -235,3 +239,5 @@ for diverse validation waves. A missing-resource candidate is a reason to
 inspect/download source, not proof that the original archive contains that
 resource. Increase batch size only after the newly observed syntax and control
 regressions have been reviewed. No model or GPU is needed for this workflow.
+
+Unknown or extensionless archive members are staged within existing archive limits and selected by content or literal dependencies before publishing original assets. Unreferenced source-like fragments are retained for audit, not promoted into document roots. The parser uses recorded original-to-derived aliases for renamed inputs and verified README root names. Dynamic paths and unsupported TeX execution remain out of scope. Use a new run or recover from the original archive for existing completed caches.

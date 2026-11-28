@@ -33,12 +33,13 @@ def _publish_identical(stage, destination):
 def extract_preserved_source(archive, directory, arxiv_id, version, *, limits):
     # Lazy import avoids a module initialization cycle: the standalone recovery
     # tool also uses the low-level extractor. Both entry points share conversion.
-    from ..tools.recover_sources import RECOVERY_SUFFIXES, convert_assets
+    from ..tools.recover_sources import RECOVERY_SUFFIXES, convert_assets, select_extra_assets
     directory=Path(directory)
     with tempfile.TemporaryDirectory(prefix='.preserve-',dir=directory) as temp:
         temp=Path(temp);original=temp/'original_assets';source=temp/'source'
         result=extract_source(archive,original,limits=limits,
-            source_suffixes=RECOVERY_SUFFIXES,source_names={'00README.json'})
+            source_suffixes=RECOVERY_SUFFIXES,source_names={'00README.json'},
+            select_extra=select_extra_assets)
         audit=dict(arxiv_id=arxiv_id,version=version,policy=POLICY,
             archive_scan_complete=result['archive_scan_complete'],
             inventory=result['asset_inventory'],extraction=dict(result),warnings=[])

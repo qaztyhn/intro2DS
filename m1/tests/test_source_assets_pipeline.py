@@ -39,17 +39,18 @@ def test_fresh_normal_extract_preserves_converts_audits_and_feeds_m2(tmp_path,ca
     assert not (version/'source/style.bst.tex').exists()
     assert not (version/'source/custom.weird').exists()
     audit=read_json(version/'source_assets_audit.json')
-    assert audit['filtered_suffix_counts']=={'.weird':1,'.png':1}
-    assert audit['filtered_source_candidates']==['custom.weird']
-    assert 'custom.weird' in capsys.readouterr().out
+    assert (version/'original_assets/custom.weird').is_file()
+    assert not (version/'source/custom.weird.tex').exists()
+    assert audit['filtered_suffix_counts']=={'.png':1}
+    assert audit['filtered_source_candidates']==[]
+    assert 'source_assets:' in capsys.readouterr().out
     result=process_publication_detailed(tmp_path/'offline',IDENTITY)
     assert result.version_status[0]['status']=='ok'
     assert not result.version_status[0]['missing_citation_keys']
     assert any('Plain text reached' in r['content'] for r in result.elements)
     report=audit_run(tmp_path/'offline',member_id='24120058')
-    assert report['summary']['review_versions']==1
-    assert report['retry_plan'][0]['archive']==str(archive.resolve())
-    assert report['retry_plan'][0]['paper_dir']==str(paper.resolve())
+    assert report['summary']['review_versions']==0
+    assert report['retry_plan']==[]
 
 
 @pytest.mark.parametrize('bbl,conversion',[
@@ -200,3 +201,54 @@ def test_support_documentclass_is_only_read_as_an_input(tmp_path, directive, sta
     assert row['status'] == status
     assert ('MISSING_DEPENDENCY' in row['partial_reasons']) == (directive == r'\input{rogue}')
     assert any('Support marker' in r['content'] for r in result.elements) == included
+
+
+@pytest.mark.parametrize('root', ['main.txt', 'paper', 'paper.custom'])
+def test_nonstandard_document_root_and_literal_inputs(tmp_path, root):
+    main = r'\documentclass{article}\begin{document}\section{Intro}\input{body}\input{part.custom}\end{document}'
+    cfg, paper, _ = setup(tmp_path, {root: main.encode(),
+        'body': b'Extensionless narrative.',
+        'part.custom': br'\section{Results}Custom narrative.',
+        'unused.sty': br'\documentclass{article}Not a root.',
+        'unused.cls': br'\ProvidesClass{unused}',
+        'unrelated': b'Unrelated prose.',
+        'binary.custom': b'\x00\x01binary',
+        'fake.svg': br'\section{Image}'})
+    manifest = extract_version(cfg, IDENTITY, 1)
+    version = paper/'versions/v1'
+    assert manifest['extract_status'] == 'ok'
+    assert set(manifest['source_files']) == {root+'.tex', 'body.tex', 'part.custom.tex'}
+    for name in (root, 'body', 'part.custom', 'unused.sty', 'unused.cls'):
+        assert (version/'original_assets'/name).is_file()
+    for name in ('unrelated', 'binary.custom', 'fake.svg'):
+        assert not (version/'original_assets'/name).exists()
+    result = process_publication_detailed(tmp_path/'offline', IDENTITY)
+    assert result.version_status[0]['status'] == 'ok'
+    assert any('Extensionless narrative' in row['content'] for row in result.elements)
+    assert any('Custom narrative' in row['content'] for row in result.elements)
+    assert not any('Not a root' in row['content'] for row in result.elements)
+
+
+def test_package_only_is_not_a_document(tmp_path):
+    cfg, paper, _ = setup(tmp_path, {'fake.sty':
+        br'\documentclass{article}\begin{document}Package\end{document}'})
+    manifest = extract_version(cfg, IDENTITY, 1)
+    assert manifest['extract_status'] == 'empty'
+    assert not manifest['source_files']
+    assert (paper/'versions/v1/original_assets/fake.sty').is_file()
+
+
+def test_renamed_root_readme_and_conditional_custom_input(tmp_path):
+    from m2.src.parsing.gathering import gather_source
+    from m2.src.parsing.m1_adapter import load_versions
+
+    main = br'\documentclass{article}\begin{document}\iftrue\input{nested/passage.custom}\fi\end{document}'
+    cfg, _, _ = setup(tmp_path, {'main.txt': main, 'other.tex':
+        br'\documentclass{article}\begin{document}Other\end{document}',
+        'nested/passage.custom': b'Conditional narrative.',
+        '00README.json': b'{"sources":[{"filename":"main.txt","usage":"toplevel"}]}'})
+    extract_version(cfg, IDENTITY, 1)
+    version, = load_versions(tmp_path/'offline', IDENTITY)
+    doc = gather_source(version)
+    assert doc.root_file == 'main.txt.tex'
+    assert 'Conditional narrative' in doc.latex

@@ -168,3 +168,15 @@ def test_recover_archive_creates_valid_new_run(tmp_path):
     assert provenance['archive_sha256'] and not provenance['validation']
     with pytest.raises(FileExistsError):
         recover_version(item,output)
+
+
+def test_explicit_package_input_is_derived_but_unused_package_is_not(tmp_path):
+    source, records, warnings = convert(tmp_path, {
+        'main.tex': r'\documentclass{article}\input{used.sty}',
+        'used.sty': r'\newcommand{\foo}{Bar}',
+        'unused.cls': r'\documentclass{article}',
+        'unused.def': r'\def\foo{Bar}'})
+    assert not warnings
+    assert set(p.name for p in source.iterdir()) == {'main.tex', 'used.sty.tex'}
+    roles = {r['original']: r['asset_role'] for r in records}
+    assert roles['used.sty'] == roles['unused.cls'] == roles['unused.def'] == 'support'

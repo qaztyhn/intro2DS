@@ -535,6 +535,7 @@ class Context:
             if relative in self.names: raise GatheringError('DUPLICATE_SOURCE_PATH', relative)
             self.names.add(relative)
         self.cache, self.clean_cache = {}, {}
+        self.asset_aliases = {}
         self.bytes_read = 0
         self.warnings, self.included, self.bibs = [], [], {}
         self.pending_warnings = {}
@@ -588,7 +589,8 @@ class Context:
         if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive or ':' in raw:
             self.warn('UNSAFE_PATH', origin, raw); return None
         bases = (posixpath.dirname(origin), posixpath.dirname(self.root or ''), '')
-        candidates, safe = _path_candidates(self.names, bases, raw, suffix)
+        candidates, safe = _path_candidates(self.names | set(self.asset_aliases), bases, raw, suffix)
+        candidates = {self.asset_aliases.get(name, name) for name in candidates}
         if not candidates:
             missing_code = 'MISSING_BIB_RESOURCE' if suffix == '.bib' else 'MISSING_DEPENDENCY'
             self.warn(missing_code if safe else 'UNSAFE_PATH', origin, raw)
@@ -619,7 +621,8 @@ class Context:
 
     def attach_root_bbl(self):
         """Attach the compilation root's .bbl, not arbitrary unused files."""
-        root_path = PurePosixPath(self.root)
+        original = next((name for name, derived in self.asset_aliases.items() if derived == self.root), self.root)
+        root_path = PurePosixPath(original)
         candidates = {str(root_path.with_suffix('.bbl'))}
         if root_path.parent != PurePosixPath('.'):
             candidates.add(root_path.stem + '.bbl')
@@ -762,7 +765,8 @@ def _document_assets(audit, source):
         if derived in derived_paths:
             raise ValueError(f'duplicate derived path: {derived}')
         derived_paths.add(derived)
-        if PurePosixPath(original).suffix.lower() in {'.tex', '.ltx', '.latex'}:
+        role = record.get('asset_role')
+        if role == 'document' or (role is None and PurePosixPath(original).suffix.lower() in {'.tex', '.ltx', '.latex'}):
             documents.add(derived)
     missing = sorted(set(source.source_files) - derived_paths)
     if missing:
@@ -772,13 +776,22 @@ def _document_assets(audit, source):
 
 def _load_document_assets(context):
     path = context.base.parent / 'source_assets_audit.json'
+    if not path.exists() and not path.is_symlink():
+        path = context.base.parent / 'recovery_provenance.json'
     try:
         no_symlinks(path)
         with path.open('rb') as handle:
             raw = handle.read(MAX_FILE_BYTES + 1)
         if len(raw) > MAX_FILE_BYTES:
             raise ValueError('source asset audit exceeds size limit')
-        return _document_assets(json.loads(raw), context.source)
+        audit = json.loads(raw)
+        documents = _document_assets(audit, context.source)
+        if documents is not None:
+            context.asset_aliases = {
+                relative_path(row['original']): relative_path(row['derived'])
+                for row in audit['records'] if 'derived' in row
+                and row['original'] != row['derived'] and row['derived'] in context.names}
+        return documents
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:
@@ -823,16 +836,16 @@ def _gather_source(source: SourceVersion, selected_root=None, root_reviews=None)
             return result
         if source.extract_status != 'ok': raise GatheringError('SOURCE_NOT_EXTRACTED', source.error_code or source.extract_status)
         context = Context(source)
+        documents = _load_document_assets(context)
         compilation_hint = _compilation_hint(context)
+        if compilation_hint:
+            compilation_hint = dict(compilation_hint, **{
+                key: [context.asset_aliases.get(n, n) for n in compilation_hint[key]]
+                for key in ('toplevels', 'ignored')})
         ignored = set(compilation_hint['ignored']) if compilation_hint else set()
         tex_files = {name for name in context.names - ignored if name.lower().endswith('.tex')}
-        documents = _load_document_assets(context)
         eligible = tex_files if documents is None else tex_files & documents
         roots = _scan_roots(context, eligible)
-        if not roots and eligible != tex_files:
-            roots = _scan_roots(context, tex_files - eligible)
-            if roots:
-                context.warn('ROOT_FROM_DERIVED_ASSET', detail=', '.join(roots))
         original_roots = roots
         hinted_root = None
         if compilation_hint and len(compilation_hint['toplevels']) == 1:
