@@ -12,7 +12,7 @@ import unicodedata
 from typing import NamedTuple
 from collections.abc import Callable
 from .contracts import BibEntry, BibliographyResult, GatheredDocument  # noqa: F401
-from .biblatex_bbl import parse_biblatex_bbl
+from .biblatex_bbl import _without_comments, parse_biblatex_bbl
 
 log = logging.getLogger(__name__)
 
@@ -446,6 +446,34 @@ def parse_bibitems(text: str) -> tuple[list[BibEntry], list[str]]:
     return entries, warnings
 
 
+def _duplicate_conflicts(first: BibEntry, second: BibEntry) -> list[str]:
+    """Compare only canonical fields explicitly present in both copies.
+
+    A compiled BBL may contain less metadata than the original .bib; absence
+    is not a contradiction. BibTeX is kept as the primary source.
+    """
+    disagreements: list[str] = []
+    for name in ("title", "authors", "year", "doi", "journal", "url"):
+        left, right = first.fields.get(name), second.fields.get(name)
+        if left in (None, "", []) or right in (None, "", []):
+            continue
+        if name == "authors":
+            # Compare names conservatively; formatting/whitespace differences
+            # alone must not demote an otherwise complete document.
+            lval = tuple(re.sub(r"[^a-z0-9]+", "", str(v).casefold())
+                         for v in left)
+            rval = tuple(re.sub(r"[^a-z0-9]+", "", str(v).casefold())
+                         for v in right)
+        elif name == "year":
+            lval, rval = left, right
+        else:
+            lval = re.sub(r"[^a-z0-9]+", "", str(left).casefold())
+            rval = re.sub(r"[^a-z0-9]+", "", str(right).casefold())
+        if lval != rval:
+            disagreements.append(name)
+    return disagreements
+
+
 def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibEntry], list[str]]:
     """Extract raw entries of one version: .bib, then .bbl, then inline \\bibitem."""
     tag = f"[{document.arxiv_id} v{document.version}]"
@@ -455,7 +483,10 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
         sources.append((path, *parse_bib(document.bib_files[path])))
     for path in [p for p in paths if p.lower().endswith(".bbl")]:
         raw = document.bib_files[path]
-        if re.search(r"\\entry(?![A-Za-z@])", raw):
+        # Classify after stripping comments; a commented-out \entry must not
+        # shadow real \bibitem records. Preserve Biber \verb percent escapes.
+        visible = _without_comments(raw)
+        if re.search(r"\\entry(?![A-Za-z@])", visible):
             parsed, warns = parse_biblatex_bbl(raw)
         else:
             parsed, warns = parse_bibitems(raw)
@@ -466,7 +497,7 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
 
     entries: list[BibEntry] = []
     diagnostics: list[str] = []
-    seen: set[str] = set()
+    seen: dict[str, BibEntry] = {}
     for path, parsed, warns in sources:
         for w in warns:
             log.warning("%s stage=bib_parse file=%s: %s", tag, path, w)
@@ -474,12 +505,24 @@ def extract_bibliography_detailed(document: GatheredDocument) -> tuple[list[BibE
         for e in parsed:
             fold = e.original_key.casefold()  # BibTeX keys are case-insensitive
             if fold and fold in seen:
-                log.warning("%s stage=bib_parse file=%s: duplicate key '%s' "
-                            "skipped (first kept)", tag, path, e.original_key)
-                diagnostics.append(f'{tag} stage=bib_parse file={path}: duplicate key {e.original_key!r} skipped')
+                # Bib and compiled BBL commonly repeat the same citation key.
+                # Treat missing/complementary metadata as non-conflicting;
+                # only contradictory comparable fields warrant a QA warning.
+                previous, candidate = normalize_entry(seen[fold]), normalize_entry(e)
+                conflicts = _duplicate_conflicts(previous, candidate)
+                if conflicts:
+                    log.warning("%s stage=bib_parse file=%s: duplicate key '%s' "
+                                "conflicting fields %s (first kept)",
+                                tag, path, e.original_key, ", ".join(conflicts))
+                    diagnostics.append(
+                        f'{tag} stage=bib_parse file={path}: duplicate key '
+                        f'{e.original_key!r} conflicting fields {", ".join(conflicts)} (first kept)')
+                else:
+                    log.debug("%s stage=bib_parse file=%s: equivalent/complementary key %r",
+                              tag, path, e.original_key)
                 continue
             if fold:
-                seen.add(fold)
+                seen[fold] = e
             entries.append(e)
     entries, crossref_warnings = resolve_crossrefs(entries)
     for warning in crossref_warnings:
